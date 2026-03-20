@@ -1,0 +1,28 @@
+import { useEffect, useRef } from 'react';
+
+export function useScrollReveal() {
+  const ref = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          // Trigger animations on children with animate-* classes
+          el.querySelectorAll('.opacity-0').forEach(child => {
+            child.classList.add('animate-fade-in-up');
+          });
+          observer.unobserve(el);
+        }
+      },
+      { threshold: 0.15, rootMargin: '0px 0px -50px 0px' }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return ref as React.RefObject<HTMLDivElement>;
+}
