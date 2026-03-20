@@ -1,16 +1,23 @@
 import { Link } from 'react-router-dom';
-import { mockDashboardStats } from '@/lib/mockData';
+import { mockAdminReservations } from '@/lib/mockData';
 import { CalendarDays, Clock, TrendingUp, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-const stats = [
-  { label: 'Rezerwacje dziś', value: mockDashboardStats.totalReservationsToday, icon: CalendarDays, highlight: false },
-  { label: 'Oczekujące', value: mockDashboardStats.pendingApprovalCount, icon: AlertCircle, highlight: mockDashboardStats.pendingApprovalCount > 0 },
-  { label: 'Aktywne w tym tyg.', value: mockDashboardStats.activeReservationsThisWeek, icon: Clock, highlight: false },
-  { label: 'Przychód tyg.', value: `${mockDashboardStats.revenueThisWeek.toFixed(0)} zł`, icon: TrendingUp, highlight: false },
-];
-
 export default function AdminDashboard() {
+  const adminFacilityId = localStorage.getItem('mosir_admin_facility');
+  const adminReservations = mockAdminReservations.filter(r => !adminFacilityId || r.area?.facility_id === adminFacilityId);
+  const pendingCount = adminReservations.filter(r => r.status === 'PENDING').length;
+  const totalToday = adminReservations.length;
+  const activeThisWeek = adminReservations.filter(r => r.status !== 'CANCELLED').length;
+  const revenueThisWeek = adminReservations.filter(r => r.payment).reduce((acc, r) => acc + (r.payment?.amount || 0), 0);
+
+  const stats = [
+    { label: 'Rezerwacje dziś', value: totalToday, icon: CalendarDays, highlight: false },
+    { label: 'Oczekujące', value: pendingCount, icon: AlertCircle, highlight: pendingCount > 0 },
+    { label: 'Aktywne w tym tyg.', value: activeThisWeek, icon: Clock, highlight: false },
+    { label: 'Przychód', value: `${revenueThisWeek.toFixed(0)} zł`, icon: TrendingUp, highlight: false },
+  ];
+
   return (
     <div className="space-y-8 animate-fade-in">
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -46,9 +53,9 @@ export default function AdminDashboard() {
         className="inline-flex items-center gap-2 px-5 py-3 bg-secondary/15 rounded-xl font-display font-semibold text-sm text-secondary-container hover:bg-secondary/25 transition-colors"
       >
         Oczekujące rezerwacje
-        {mockDashboardStats.pendingApprovalCount > 0 && (
+        {pendingCount > 0 && (
           <span className="w-6 h-6 rounded-full bg-secondary text-secondary-foreground text-xs font-bold flex items-center justify-center">
-            {mockDashboardStats.pendingApprovalCount}
+            {pendingCount}
           </span>
         )}
       </Link>

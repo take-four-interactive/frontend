@@ -67,63 +67,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Facilities */}
-      <section id="obiekty" className="py-24 bg-surface-low" ref={facilitiesRef}>
-        <div className="container mx-auto px-4">
-          <div className="max-w-xl mb-16 opacity-0 animate-fade-in-up">
-            <p className="font-body text-xs font-medium tracking-[0.04em] uppercase text-secondary-container mb-3">Nasze obiekty</p>
-            <h2 className="font-display text-3xl md:text-4xl font-bold tracking-[-0.02em] text-foreground text-balance">
-              Wybierz obiekt i zarezerwuj termin
-            </h2>
-          </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {mockFacilities.map((facility, i) => {
-              const areas = mockAreas[facility.id] || [];
-              const minPrice = areas.length > 0 ? Math.min(...areas.map(a => a.price_per_15mins * 4)) : 0;
-              const isOpen = areas.some(a => {
-                const now = new Date();
-                const mins = now.getHours() * 60 + now.getMinutes();
-                return mins >= a.available_from && mins < a.available_to;
-              });
-
-              return (
-                <div
-                  key={facility.id}
-                  className="bg-surface-lowest rounded-2xl overflow-hidden card-accent opacity-0 animate-fade-in-up group"
-                  style={{ animationDelay: `${150 + i * 80}ms` }}
-                >
-                  <div className="aspect-[4/3] overflow-hidden">
-                    <img
-                      src={facilityImages[facility.id] || heroImage}
-                      alt={facility.name}
-                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                      loading="lazy"
-                    />
-                  </div>
-                  <div className="p-5">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={isOpen ? 'status-dot-open' : 'status-dot-closed'} />
-                      <span className="font-body text-xs text-muted-foreground">{isOpen ? 'Otwarte' : 'Zamknięte'}</span>
-                    </div>
-                    <h3 className="font-display text-lg font-semibold tracking-[-0.01em] text-foreground mb-1">{facility.name}</h3>
-                    {minPrice > 0 && (
-                      <p className="font-body text-sm text-muted-foreground mb-4">
-                        od <span className="font-medium text-foreground">{minPrice.toFixed(0)} zł</span>/h
-                      </p>
-                    )}
-                    <Link to="/rezerwacja">
-                      <Button variant="secondary" size="sm" className="w-full">
-                        Zarezerwuj
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
       {/* How It Works */}
       <section className="py-24" ref={howRef}>
         <div className="container mx-auto px-4">

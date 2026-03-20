@@ -7,14 +7,16 @@ import type { ReservationStatus } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { Search } from 'lucide-react';
 
-const STATUSES: (ReservationStatus | 'ALL')[] = ['ALL', 'PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED'];
-const STATUS_LABEL: Record<string, string> = { ALL: 'Wszystkie', PENDING: 'Oczekujące', ACCEPTED: 'Zaakceptowane', REJECTED: 'Odrzucone', CANCELLED: 'Anulowane' };
+const STATUSES: (ReservationStatus | 'ALL')[] = ['ALL', 'PENDING', 'CONFIRMED', 'CANCELLED'];
+const STATUS_LABEL: Record<string, string> = { ALL: 'Wszystkie', PENDING: 'Oczekujące', CONFIRMED: 'Zaplanowane', CANCELLED: 'Anulowane' };
 
 export default function AdminReservations() {
   const [statusFilter, setStatusFilter] = useState<ReservationStatus | 'ALL'>('ALL');
   const [search, setSearch] = useState('');
+  const adminFacilityId = localStorage.getItem('mosir_admin_facility');
 
   const filtered = mockAdminReservations.filter(r => {
+    if (adminFacilityId && r.area?.facility_id !== adminFacilityId) return false;
     if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -85,7 +87,7 @@ export default function AdminReservations() {
                   <td className="px-5 py-4 hidden md:table-cell font-body text-sm text-foreground">{r.area?.name}</td>
                   <td className="px-5 py-4 hidden lg:table-cell font-body text-sm text-muted-foreground">{RESERVATION_TYPE_LABELS[r.reservationType]}</td>
                   <td className="px-5 py-4 hidden lg:table-cell font-body text-sm text-muted-foreground">
-                    {r.schedules.map(s => `${minutesToTime(s.startsAt)}–${minutesToTime(s.endsAt)}`).join(', ')}
+                    {r.schedules.map(s => `${minutesToTime(s.starts_at)}–${minutesToTime(s.ends_at)}`).join(', ')}
                   </td>
                   <td className="px-5 py-4 font-display text-sm font-semibold text-foreground">{r.payment?.amount.toFixed(0)} zł</td>
                   <td className="px-5 py-4"><StatusBadge status={r.status} /></td>

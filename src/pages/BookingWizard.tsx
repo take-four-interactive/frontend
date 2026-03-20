@@ -18,7 +18,7 @@ const STEPS = [
   { label: 'Podsumowanie', icon: FileText },
 ];
 
-const ALL_DAYS: DayOfWeek[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+const ALL_DAYS: DayOfWeek[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'SATURDAY', 'SUNDAY'];
 
 export default function BookingWizard() {
   const navigate = useNavigate();
@@ -39,16 +39,18 @@ export default function BookingWizard() {
   const [nip, setNip] = useState('');
 
   // Step 4
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [dateRangeEnd, setDateRangeEnd] = useState<string | null>(null);
+  const [currentMonthDate, setCurrentMonthDate] = useState(new Date());
+  const [startDateStr, setStartDateStr] = useState<string | null>(null);
+  const [endDateStr, setEndDateStr] = useState<string | null>(null);
   const [selectedDays, setSelectedDays] = useState<DayOfWeek[]>([]);
-  const [selectedSlots, setSelectedSlots] = useState<number[]>([]);
+  const [startTime, setStartTime] = useState<number | null>(null);
+  const [endTime, setEndTime] = useState<number | null>(null);
 
   // Post submission
   const [submitted, setSubmitted] = useState(false);
   const [reservationNumber, setReservationNumber] = useState('');
 
-  const areas = selectedFacility ? mockAreas[selectedFacility] || [] : [];
+  const areas = selectedFacility ? mockAreas.filter(a => a.facility_id === selectedFacility) : [];
   const takenSlots = selectedArea ? mockTakenSlots[selectedArea.id] || [] : [];
 
   const canNext = () => {
@@ -56,7 +58,13 @@ export default function BookingWizard() {
       case 0: return !!selectedArea;
       case 1: return !!reservationType;
       case 2: return holder.trim() && email.includes('@') && phone.trim() && (!isCompany || nip.trim());
-      case 3: return selectedSlots.length > 0 && (reservationType === 'SUBSCRIPTION' ? selectedDays.length > 0 : !!selectedDate);
+      case 3: {
+        if (startTime === null || endTime === null || startTime >= endTime) return false;
+        if (reservationType === 'SINGLE') return !!startDateStr;
+        if (reservationType === 'SUBSCRIPTION') return selectedDays.length > 0;
+        if (reservationType === 'PERIODIC') return !!startDateStr && !!endDateStr && selectedDays.length > 0;
+        return false;
+      }
       default: return true;
     }
   };
@@ -64,7 +72,7 @@ export default function BookingWizard() {
   const generateTimeSlots = () => {
     if (!selectedArea) return [];
     const slots: number[] = [];
-    for (let m = selectedArea.available_from; m < selectedArea.available_to; m += 60) {
+    for (let m = selectedArea.available_from; m < selectedArea.available_to; m += 15) {
       slots.push(m);
     }
     return slots;
@@ -82,18 +90,25 @@ export default function BookingWizard() {
   };
 
   const calculatePrice = () => {
-    if (!selectedArea || selectedSlots.length === 0) return 0;
-    const pricePerHour = selectedArea.price_per_15mins * 4;
-    const hours = selectedSlots.length;
-    if (reservationType === 'ONCE') return pricePerHour * hours;
-    if (reservationType === 'PERIODIC' && selectedDate && dateRangeEnd) {
-      const start = new Date(selectedDate);
-      const end = new Date(dateRangeEnd);
-      const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-      return pricePerHour * hours * days;
+    if (!selectedArea || startTime === null || endTime === null || startTime >= endTime) return 0;
+    const intervals = (endTime - startTime) / 15;
+    const basePrice = selectedArea.price * intervals;
+    if (reservationType === 'SINGLE') return basePrice;
+    if (reservationType === 'PERIODIC') {
+      if (!startDateStr || !endDateStr) return 0;
+      let count = 0;
+      const cur = new Date(startDateStr);
+      const end = new Date(endDateStr);
+      const mMap: Record<number, DayOfWeek | undefined> = { 0: 'SUNDAY', 1: 'MONDAY', 2: 'TUESDAY', 3: 'WEDNESDAY', 4: 'THURSDAY', 6: 'SATURDAY' };
+      while (cur <= end) {
+        const d = mMap[cur.getDay()];
+        if (d && selectedDays.includes(d)) count++;
+        cur.setDate(cur.getDate() + 1);
+      }
+      return basePrice * count;
     }
-    if (reservationType === 'SUBSCRIPTION') return pricePerHour * hours * selectedDays.length;
-    return pricePerHour * hours;
+    if (reservationType === 'SUBSCRIPTION') return basePrice * selectedDays.length * 4;
+    return basePrice;
   };
 
   const handleSubmit = () => {
@@ -181,7 +196,7 @@ export default function BookingWizard() {
                     </button>
                     {selectedFacility === facility.id && (
                       <div className="ml-4 mt-3 space-y-2">
-                        {(mockAreas[facility.id] || []).map(area => (
+                        {mockAreas.filter(a => a.facility_id === facility.id).map(area => (
                           <button
                             key={area.id}
                             onClick={() => setSelectedArea(area)}
@@ -197,7 +212,7 @@ export default function BookingWizard() {
                               </span>
                             </div>
                             <span className="font-display font-bold text-sm text-secondary-container bg-secondary/15 px-3 py-1 rounded-full">
-                              {(area.price_per_15mins * 4).toFixed(0)} zł/h
+                              {(area.price * 4).toFixed(0)} zł/h
                             </span>
                           </button>
                         ))}
@@ -216,7 +231,7 @@ export default function BookingWizard() {
               <p className="font-body text-sm text-muted-foreground mb-6">Wybierz, jak chcesz zarezerwować obiekt.</p>
               <div className="space-y-3">
                 {([
-                  { type: 'ONCE' as ReservationType, desc: 'Jednorazowa rezerwacja na wybrany dzień.' },
+                  { type: 'SINGLE' as ReservationType, desc: 'Jednorazowa rezerwacja na wybrany dzień.' },
                   { type: 'PERIODIC' as ReservationType, desc: 'Rezerwacja na zakres dat (maks. 4 tygodnie).' },
                   { type: 'SUBSCRIPTION' as ReservationType, desc: 'Cykliczna rezerwacja w wybrane dni tygodnia.' },
                 ]).map(opt => (
@@ -326,7 +341,7 @@ export default function BookingWizard() {
               <h2 className="font-display text-2xl font-bold tracking-[-0.02em] mb-1">Wybierz termin</h2>
               <p className="font-body text-sm text-muted-foreground mb-6">Wybierz datę i godziny rezerwacji.</p>
 
-              {reservationType === 'SUBSCRIPTION' ? (
+              {(reservationType === 'SUBSCRIPTION' || reservationType === 'PERIODIC') && (
                 <div className="mb-8">
                   <p className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-3">Dni tygodnia</p>
                   <div className="flex flex-wrap gap-2">
@@ -336,7 +351,7 @@ export default function BookingWizard() {
                         onClick={() => setSelectedDays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])}
                         className={cn(
                           'px-4 py-2 rounded-full font-body text-sm font-medium transition-colors',
-                          selectedDays.includes(day) ? 'bg-accent text-accent-foreground' : 'bg-surface-low text-muted-foreground hover:bg-surface-high/50'
+                          selectedDays.includes(day) ? 'bg-primary text-primary-foreground shadow-md' : 'bg-surface-high text-muted-foreground hover:bg-surface-high/80'
                         )}
                       >
                         {DAY_LABELS[day]}
@@ -344,104 +359,158 @@ export default function BookingWizard() {
                     ))}
                   </div>
                 </div>
-              ) : (
-                <div className="mb-8">
+              )}
+
+              {(reservationType === 'SINGLE' || reservationType === 'PERIODIC') && (
+                <div className="mb-10 max-w-sm">
                   <p className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-3">
-                    {reservationType === 'PERIODIC' ? 'Zakres dat' : 'Data'}
+                    {reservationType === 'PERIODIC' ? 'Wybierz zakres dat' : 'Wybierz datę'}
                   </p>
-                  <div className="grid grid-cols-7 gap-1.5 max-w-sm">
-                    {['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'Sb', 'Nd'].map(d => (
-                      <span key={d} className="text-center font-body text-xs text-muted-foreground py-1">{d}</span>
-                    ))}
-                    {(() => {
-                      const days = generateCalendarDays();
-                      const firstDayOfWeek = (days[0].getDay() + 6) % 7;
-                      const blanks = Array(firstDayOfWeek).fill(null);
-                      return [...blanks.map((_, i) => <span key={`b-${i}`} />), ...days.map(day => {
-                        const dateStr = day.toISOString().split('T')[0];
-                        const isSelected = selectedDate === dateStr;
-                        const isInRange = reservationType === 'PERIODIC' && selectedDate && dateRangeEnd &&
-                          dateStr >= selectedDate && dateStr <= dateRangeEnd;
-                        return (
-                          <button
-                            key={dateStr}
-                            onClick={() => {
-                              if (reservationType === 'PERIODIC') {
-                                if (!selectedDate || dateRangeEnd) {
-                                  setSelectedDate(dateStr);
-                                  setDateRangeEnd(null);
-                                } else {
-                                  if (dateStr < selectedDate) {
-                                    setSelectedDate(dateStr);
-                                    setDateRangeEnd(null);
-                                  } else {
-                                    const start = new Date(selectedDate);
-                                    const end = new Date(dateStr);
-                                    const diff = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
-                                    if (diff > 28) {
-                                      const clamped = new Date(start);
-                                      clamped.setDate(clamped.getDate() + 28);
-                                      setDateRangeEnd(clamped.toISOString().split('T')[0]);
-                                    } else {
-                                      setDateRangeEnd(dateStr);
-                                    }
-                                  }
-                                }
-                              } else {
-                                setSelectedDate(dateStr);
-                              }
-                            }}
-                            className={cn(
-                              'w-full aspect-square rounded-lg font-body text-sm transition-colors flex items-center justify-center',
-                              isSelected || isInRange
-                                ? 'bg-primary text-primary-foreground font-medium'
-                                : 'text-foreground hover:bg-surface-high/50'
-                            )}
-                          >
-                            {day.getDate()}
-                          </button>
-                        );
-                      })];
-                    })()}
+                  
+                  {/* Custom Calendar Card */}
+                  <div className="bg-surface-lowest shadow-ambient rounded-2xl p-5 border border-surface-high">
+                    <div className="flex justify-between items-center mb-4">
+                      <button onClick={() => setCurrentMonthDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))} className="p-2 hover:bg-surface-low rounded-lg transition-colors text-primary">
+                        <ArrowLeft size={18} />
+                      </button>
+                      <span className="font-display font-semibold text-foreground text-sm uppercase tracking-wide">
+                        {currentMonthDate.toLocaleString('pl-PL', { month: 'long', year: 'numeric' })}
+                      </span>
+                      <button onClick={() => setCurrentMonthDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))} className="p-2 hover:bg-surface-low rounded-lg transition-colors text-primary">
+                        <ArrowRight size={18} />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-y-2 mb-2">
+                      {['Nd', 'Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'Sb'].map(d => (
+                        <span key={d} className="text-center font-body text-xs font-medium text-muted-foreground">{d}</span>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-y-1">
+                      {(() => {
+                        const year = currentMonthDate.getFullYear();
+                        const month = currentMonthDate.getMonth();
+                        const firstDay = new Date(year, month, 1).getDay();
+                        const daysInMonth = new Date(year, month + 1, 0).getDate();
+                        const daysPre = Array(firstDay).fill(null);
+                        const daysIds = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+                        const handleDateClick = (dateStr: string) => {
+                          if (reservationType === 'SINGLE') {
+                            setStartDateStr(dateStr);
+                            setEndDateStr(null);
+                          } else {
+                            if (startDateStr === null) {
+                              setStartDateStr(dateStr);
+                              setEndDateStr(null);
+                            } else if (endDateStr !== null) {
+                              setStartDateStr(dateStr);
+                              setEndDateStr(null);
+                            } else if (dateStr === startDateStr) {
+                              setStartDateStr(null);
+                            } else if (dateStr < startDateStr) {
+                              return;
+                            } else {
+                              setEndDateStr(dateStr);
+                            }
+                          }
+                        };
+
+                        return [...daysPre.map((_, i) => <span key={`pre-${i}`} />), ...daysIds.map(d => {
+                          const dateObj = new Date(year, month, d);
+                          // Adjust for local timezone string comparison
+                          const dateStr = [dateObj.getFullYear(), String(dateObj.getMonth() + 1).padStart(2, '0'), String(dateObj.getDate()).padStart(2, '0')].join('-');
+                          
+                          const isStart = startDateStr === dateStr;
+                          const isEnd = endDateStr === dateStr;
+                          const isBetween = reservationType === 'PERIODIC' && startDateStr && endDateStr && dateStr > startDateStr && dateStr < endDateStr;
+                          const isSelected = isStart || isEnd || isBetween;
+
+                          return (
+                            <div key={d} className={cn(
+                              "h-10 flex items-center justify-center relative",
+                              isBetween && "bg-primary/10",
+                              isStart && endDateStr && "bg-gradient-to-r from-transparent 50% to-primary/10",
+                              isEnd && startDateStr && "bg-gradient-to-l from-transparent 50% to-primary/10",
+                            )}>
+                              <button
+                                onClick={() => handleDateClick(dateStr)}
+                                className={cn(
+                                  'w-8 h-8 rounded-lg font-body text-sm transition-all flex items-center justify-center relative z-10',
+                                  isStart ? 'border-2 border-primary text-primary font-bold shadow-sm bg-surface-lowest' : '',
+                                  isEnd ? 'bg-primary text-primary-foreground font-bold shadow-md' : '',
+                                  !isStart && !isEnd && isBetween ? 'text-primary' : '',
+                                  !isSelected ? 'text-foreground hover:bg-surface-high/50' : ''
+                                )}
+                              >
+                                {d}
+                              </button>
+                            </div>
+                          );
+                        })];
+                      })()}
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* Time Slots */}
+              {/* Time Slots (Range Picker Visual Grid) */}
               <div>
-                <div className="flex items-center gap-4 mb-3">
-                  <p className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground">Godziny</p>
-                  <div className="flex items-center gap-3 ml-auto">
-                    <span className="flex items-center gap-1.5 font-body text-xs text-muted-foreground">
-                      <span className="w-3 h-3 rounded bg-primary" /> Wybrana
-                    </span>
-                    <span className="flex items-center gap-1.5 font-body text-xs text-muted-foreground">
-                      <span className="w-3 h-3 rounded bg-surface-high" /> Zajęta
-                    </span>
+                <p className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-3">Wybierz zakres czasu</p>
+                <div className="bg-surface-lowest shadow-ambient rounded-2xl p-5 border border-surface-high">
+                  <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-y-2">
+                    {generateTimeSlots().map((slot, index, arr) => {
+                      const isTaken = takenSlots.includes(slot);
+                      const isStart = startTime === slot;
+                      const isEndBlock = endTime !== null && slot === endTime - 15;
+                      const isBetween = startTime !== null && endTime !== null && slot > startTime && slot < endTime - 15;
+                      const isSelected = isStart || isEndBlock || isBetween;
+
+                      const handleTimeClick = () => {
+                        if (startTime === null) {
+                          setStartTime(slot);
+                          setEndTime(slot + 15);
+                        } else if (endTime !== null && endTime > startTime + 15) {
+                          setStartTime(slot);
+                          setEndTime(slot + 15);
+                        } else if (startTime === slot && endTime === slot + 15) {
+                          setStartTime(null);
+                          setEndTime(null);
+                        } else {
+                          const proposedEnd = slot + 15;
+                          if (proposedEnd <= startTime) return;
+                          const hasTaken = takenSlots.some(t => t >= startTime && t < proposedEnd);
+                          if (hasTaken) return;
+                          setEndTime(proposedEnd);
+                        }
+                      };
+
+                      return (
+                        <div key={slot} className={cn(
+                          "h-10 flex items-center justify-center relative",
+                          isBetween && "bg-primary/10",
+                          isStart && endTime !== null && endTime > startTime + 15 && "bg-gradient-to-r from-transparent 50% to-primary/10",
+                          isEndBlock && startTime !== null && endTime > startTime + 15 && "bg-gradient-to-l from-transparent 50% to-primary/10",
+                        )}>
+                          <button
+                            disabled={isTaken}
+                            onClick={handleTimeClick}
+                            className={cn(
+                              'w-full mx-1 py-1.5 rounded-lg font-body text-xs font-medium transition-all relative z-10',
+                              isTaken ? 'bg-surface-high text-muted-foreground/40 line-through cursor-not-allowed' : '',
+                              isStart && !isTaken ? 'border-2 border-primary text-primary bg-surface-lowest shadow-sm' : '',
+                              isEndBlock && !isStart && !isTaken ? 'bg-primary text-primary-foreground shadow-md' : '',
+                              isBetween && !isTaken ? 'text-primary' : '',
+                              !isSelected && !isTaken ? 'text-foreground hover:bg-surface-high' : ''
+                            )}
+                          >
+                            {minutesToTime(slot)}
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
-                <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
-                  {generateTimeSlots().map(slot => {
-                    const isTaken = takenSlots.includes(slot);
-                    const isSelected = selectedSlots.includes(slot);
-                    return (
-                      <button
-                        key={slot}
-                        disabled={isTaken}
-                        onClick={() => setSelectedSlots(prev =>
-                          prev.includes(slot) ? prev.filter(s => s !== slot) : [...prev, slot]
-                        )}
-                        className={cn(
-                          'py-2.5 rounded-lg font-body text-sm transition-colors',
-                          isTaken && 'bg-surface-high text-muted-foreground/50 line-through cursor-not-allowed',
-                          isSelected && !isTaken && 'bg-primary text-primary-foreground font-medium',
-                          !isTaken && !isSelected && 'bg-surface-low text-foreground hover:bg-surface-high/50'
-                        )}
-                      >
-                        {minutesToTime(slot)}
-                      </button>
-                    );
-                  })}
                 </div>
               </div>
             </div>
@@ -462,12 +531,12 @@ export default function BookingWizard() {
                     value={
                       reservationType === 'SUBSCRIPTION'
                         ? selectedDays.map(d => DAY_LABELS[d]).join(', ')
-                        : reservationType === 'PERIODIC' && dateRangeEnd
-                          ? `${selectedDate} — ${dateRangeEnd}`
-                          : selectedDate || ''
+                        : reservationType === 'PERIODIC'
+                          ? `Od ${startDateStr || ''} do ${endDateStr || startDateStr} (${selectedDays.map(d => DAY_LABELS[d].slice(0, 3)).join(', ')})`
+                          : startDateStr || ''
                     }
                   />
-                  <Row label="Godziny" value={selectedSlots.sort((a, b) => a - b).map(s => `${minutesToTime(s)}–${minutesToTime(s + 60)}`).join(', ')} />
+                  <Row label="Godziny" value={startTime !== null && endTime !== null ? `${minutesToTime(startTime)} – ${minutesToTime(endTime)}` : ''} />
                 </div>
                 <div className="bg-surface-low rounded-xl p-5 space-y-3">
                   <Row label={isCompany ? 'Firma' : 'Imię i nazwisko'} value={holder} />

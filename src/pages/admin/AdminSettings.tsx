@@ -5,7 +5,8 @@ import { minutesToTime } from '@/lib/types';
 
 export default function AdminSettings() {
   const facility = mockFacilities[0];
-  const areas = mockAreas['1'] || [];
+  const adminFacilityId = localStorage.getItem('mosir_admin_facility');
+  const areas = mockAreas.filter(a => a.facility_id === adminFacilityId);
   const [facilityName, setFacilityName] = useState(facility.name);
   const [saved, setSaved] = useState(false);
 
@@ -48,7 +49,7 @@ export default function AdminSettings() {
                   Godziny: {minutesToTime(area.available_from)} – {minutesToTime(area.available_to)}
                 </span>
                 <span className="font-body text-xs text-muted-foreground">
-                  Cena: {(area.price_per_15mins * 4).toFixed(0)} zł/h
+                  Cena: {(area.price * 4).toFixed(0)} zł/h
                 </span>
               </div>
             </div>

@@ -1,49 +1,57 @@
 export interface Facility {
-  id: string;
+  id: string; // UUID
   name: string;
-  image_path: string | null;
+  image_path: string;
 }
 
 export interface Area {
-  id: string;
-  facility_id: string;
+  id: string; // UUID
+  facility_id: string; // UUID
   name: string;
   available_from: number;
   available_to: number;
-  price_per_15mins: number;
+  price: number;
 }
 
-export type ReservationType = 'ONCE' | 'PERIODIC' | 'SUBSCRIPTION';
-export type ReservationStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED';
-export type DayOfWeek = 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY' | 'FRIDAY' | 'SATURDAY' | 'SUNDAY';
+export interface Admin {
+  id: string; // UUID
+  name: string; // TEXT
+  password: string; // TEXT
+  facility_id: string; // UUID
+}
+
+export type ReservationType = 'SINGLE' | 'PERIODIC' | 'SUBSCRIPTION' | 'TECHNICAL_BRAKE';
+export type ReservationStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED';
+export type DayOfWeek = 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY' | 'SATURDAY' | 'SUNDAY';
 
 export interface Schedule {
-  id?: string;
-  dayOfWeek: DayOfWeek;
-  startsAt: number;
-  endsAt: number;
-  date?: string;
-  reservation_id?: string;
+  id: string; // UUID
+  day_of_week: DayOfWeek;
+  starts_at: number;
+  ends_at: number;
+  reservation_id: string; // UUID
 }
 
 export interface Payment {
-  id?: string;
+  id: string; // UUID
   amount: number;
-  created_at?: string;
-  reservation_id?: string;
+  created_at: string; // DATE
+  reservation_id: string; // UUID
 }
 
 export interface Reservation {
-  id: string;
-  reservationNumber: string;
+  id: string; // UUID
+  reservationNumber: string; // For MOSiR-YYYY-NNN UI Display
   reservationHolder: string;
-  areaId: string;
+  area_id: string; // UUID
   phoneNumber: string;
   email: string;
   nip: string | null;
   reservationType: ReservationType;
   status: ReservationStatus;
-  createdAt: string;
+  createdAt: string; // DATE
+
+  // Frontend relations
   schedules: Schedule[];
   payment?: Payment;
   area?: Area;
@@ -52,7 +60,7 @@ export interface Reservation {
 
 export interface CreateReservationRequest {
   reservationHolder: string;
-  areaId: string;
+  area_id: string;
   phoneNumber: string;
   email: string;
   nip: string | null;
@@ -96,20 +104,19 @@ export const DAY_LABELS: Record<DayOfWeek, string> = {
   TUESDAY: 'Wtorek',
   WEDNESDAY: 'Środa',
   THURSDAY: 'Czwartek',
-  FRIDAY: 'Piątek',
   SATURDAY: 'Sobota',
   SUNDAY: 'Niedziela',
 };
 
 export const RESERVATION_TYPE_LABELS: Record<ReservationType, string> = {
-  ONCE: 'Jednorazowa',
+  SINGLE: 'Jednorazowa',
   PERIODIC: 'Okresowa',
   SUBSCRIPTION: 'Subskrypcja',
+  TECHNICAL_BRAKE: 'Przerwa techniczna',
 };
 
 export const STATUS_LABELS: Record<ReservationStatus, string> = {
   PENDING: 'Oczekująca',
-  ACCEPTED: 'Zaakceptowana',
-  REJECTED: 'Odrzucona',
+  CONFIRMED: 'Zaplanowana',
   CANCELLED: 'Anulowana',
 };

@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { LogIn } from 'lucide-react';
+import { mockAdmins } from '@/lib/mockData';
 
 export default function AdminLogin() {
-  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,13 +17,19 @@ export default function AdminLogin() {
     setError('');
     // Mock login
     setTimeout(() => {
-      if (email && password) {
+      if (!name.trim()) {
+        setError('Podaj swoje imię.');
+        setLoading(false);
+        return;
+      }
+      const admin = mockAdmins.find(a => a.name === name && a.password === password);
+      if (admin) {
         localStorage.setItem('mosir_admin_token', 'mock-jwt-token');
-        localStorage.setItem('mosir_admin_name', 'Administrator');
-        localStorage.setItem('mosir_admin_facility', '1');
+        localStorage.setItem('mosir_admin_name', admin.name);
+        localStorage.setItem('mosir_admin_facility', admin.facility_id);
         navigate('/admin/dashboard');
       } else {
-        setError('Podaj adres e-mail i hasło.');
+        setError('Podano niepoprawne dane logowania.');
       }
       setLoading(false);
     }, 600);
@@ -38,16 +45,16 @@ export default function AdminLogin() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-1.5 block">E-mail</label>
+            <label className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-1.5 block">Imię</label>
             <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              className="w-full h-11 px-4 bg-surface-low rounded-t-lg font-body text-sm text-foreground focus:outline-none"
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="w-full h-11 px-4 bg-surface-low rounded-t-lg font-body text-sm text-foreground focus:outline-none transition-colors"
               style={{ borderBottom: '2px solid hsl(224 100% 87%)' }}
               onFocus={e => (e.target.style.borderBottomColor = 'hsl(237 97% 21%)')}
               onBlur={e => (e.target.style.borderBottomColor = 'hsl(224 100% 87%)')}
-              autoComplete="email"
+              autoComplete="name"
             />
           </div>
           <div>
