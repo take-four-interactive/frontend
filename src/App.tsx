@@ -37,12 +37,12 @@ const App = () => (
           <Route path="/rezerwacja" element={<BookingWizard />} />
           <Route path="/rezerwacja/:number" element={<ReservationLookup />} />
           <Route path="/admin" element={<AdminLogin />} />
-          <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
-            <Route path="dashboard" element={<AdminDashboard />} />
-            <Route path="rezerwacje" element={<AdminReservations />} />
-            <Route path="rezerwacje/:id" element={<AdminReservationDetail />} />
-            <Route path="dostepnosc" element={<AdminAvailability />} />
-            <Route path="ustawienia" element={<AdminSettings />} />
+          <Route element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
+            <Route path="/admin/dashboard" element={<AdminDashboard />} />
+            <Route path="/admin/rezerwacje" element={<AdminReservations />} />
+            <Route path="/admin/rezerwacje/:id" element={<AdminReservationDetail />} />
+            <Route path="/admin/dostepnosc" element={<AdminAvailability />} />
+            <Route path="/admin/ustawienia" element={<AdminSettings />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
