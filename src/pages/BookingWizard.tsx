@@ -1,11 +1,21 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { mockFacilities, mockAreas, mockTakenSlots } from '@/lib/mockData';
+import { api } from '@/lib/api';
+import {
+  buildBookingReservationDTO,
+  dateStrToDayOfWeek,
+  parseApiScheduleSlot,
+  mapAreaFromApi,
+  mapFacilityFromApi,
+  type ApiArea,
+  type ApiFacility,
+  type ApiSchedule,
+} from '@/lib/apiMappers';
 import {
   type Area, type DayOfWeek, type ReservationType,
   minutesToTime, DAY_LABELS, RESERVATION_TYPE_LABELS,
-  type CreateReservationRequest, type Schedule,
 } from '@/lib/types';
 import { ArrowLeft, ArrowRight, Check, Building2, User, CalendarDays, Clock, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -18,10 +28,11 @@ const STEPS = [
   { label: 'Podsumowanie', icon: FileText },
 ];
 
-const ALL_DAYS: DayOfWeek[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'SATURDAY', 'SUNDAY'];
+const ALL_DAYS: DayOfWeek[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
 
 export default function BookingWizard() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [step, setStep] = useState(0);
 
   // Step 1
@@ -49,9 +60,118 @@ export default function BookingWizard() {
   // Post submission
   const [submitted, setSubmitted] = useState(false);
   const [reservationNumber, setReservationNumber] = useState('');
+  const [submitError, setSubmitError] = useState('');
 
-  const areas = selectedFacility ? mockAreas.filter(a => a.facility_id === selectedFacility) : [];
-  const takenSlots = selectedArea ? mockTakenSlots[selectedArea.id] || [] : [];
+  const { data: facilitiesRaw = [], isPending: facilitiesLoading, isError: facilitiesError } = useQuery({
+    queryKey: ['facilities'],
+    queryFn: () => api.get<ApiFacility[]>('/api/v1/facilities'),
+  });
+  const facilities = useMemo(() => facilitiesRaw.map(mapFacilityFromApi), [facilitiesRaw]);
+
+  // Potrzebujemy wszystkich stref pod wszystkimi obiektami w kroku "Obiekt",
+  // więc pobieramy całość z /api/v1/areas i grupujemy po facility_id.
+  const { data: areasRaw = [], isPending: areasLoading, isError: areasError } = useQuery({
+    queryKey: ['areas'],
+    queryFn: () => api.get<ApiArea[]>('/api/v1/areas'),
+  });
+  const areasByFacilityId = useMemo(() => {
+    const map = new Map<string, Area[]>();
+    for (const a of areasRaw) {
+      const mapped = mapAreaFromApi(a);
+      if (!mapped.facility_id) continue;
+      const list = map.get(mapped.facility_id) ?? [];
+      list.push(mapped);
+      map.set(mapped.facility_id, list);
+    }
+    return map;
+  }, [areasRaw]);
+
+  // Backend time format is minutes from midnight (e.g. 360 => 06:00).
+  const backendTimeIsHours = false;
+
+  const { data: areaSchedulesRaw = [] } = useQuery({
+    queryKey: ['area-schedules', selectedArea?.id],
+    queryFn: () => api.get<ApiSchedule[]>(`/api/v1/areas/${selectedArea!.id}/schedules`),
+    enabled: !!selectedArea?.id,
+  });
+
+  const relevantWeekdays = useMemo(() => {
+    if (reservationType === 'SINGLE' && startDateStr) {
+      return new Set([dateStrToDayOfWeek(startDateStr)]);
+    }
+    if (reservationType === 'SUBSCRIPTION' || reservationType === 'PERIODIC') {
+      return new Set(selectedDays);
+    }
+    return new Set<DayOfWeek>();
+  }, [reservationType, startDateStr, selectedDays]);
+
+  // Zajętość liczona przez overlap dla każdego kafelka 15-minutowego.
+  // Dzięki temu działa także, gdy backend zapisuje godziny jako inty, które
+  // nie są idealnie wielokrotnościami 15 (np. 00:06–00:21).
+  const takenSet = useMemo(() => {
+    const set = new Set<number>();
+    if (!selectedArea) return set;
+    if (relevantWeekdays.size === 0) return set;
+
+    const relevantSchedules = areaSchedulesRaw
+      .map(s => {
+        const parsed = parseApiScheduleSlot(s);
+        if (!parsed) return null;
+        const st = s.reservation?.reservationStatus;
+        if (st === 'CANCELLED') return null;
+        if (!relevantWeekdays.has(parsed.day)) return null;
+        return parsed;
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    for (let slotStart = selectedArea.available_from; slotStart < selectedArea.available_to; slotStart += 15) {
+      const slotEnd = slotStart + 15;
+      const isTaken = relevantSchedules.some(s => slotStart < s.endsAt && slotEnd > s.startsAt);
+      if (isTaken) set.add(slotStart);
+    }
+    return set;
+  }, [areaSchedulesRaw, relevantWeekdays, selectedArea]);
+
+  const intervalHasConflict = useCallback(
+    (start: number, end: number) => {
+      if (start >= end) return true;
+      for (let m = start; m < end; m += 15) {
+        if (takenSet.has(m)) return true;
+      }
+      return false;
+    },
+    [takenSet],
+  );
+
+  const daysSelectionKey = useMemo(() => [...selectedDays].sort().join(','), [selectedDays]);
+
+  useEffect(() => {
+    setStartTime(null);
+    setEndTime(null);
+  }, [startDateStr, reservationType, daysSelectionKey]);
+
+  useEffect(() => {
+    if (startTime === null || endTime === null) return;
+    if (startTime >= endTime || intervalHasConflict(startTime, endTime)) {
+      setEndTime(null);
+    }
+  }, [takenSet, startTime, endTime, intervalHasConflict]);
+
+  const timeSlots = useMemo(() => {
+    if (!selectedArea) return [];
+    const slots: number[] = [];
+    for (let m = selectedArea.available_from; m < selectedArea.available_to; m += 15) {
+      slots.push(m);
+    }
+    return slots;
+  }, [selectedArea]);
+
+  const createMutation = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.post<Record<string, unknown>>('/api/v1/reservations', body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['area-schedules'] });
+    },
+  });
 
   const canNext = () => {
     switch (step) {
@@ -60,6 +180,7 @@ export default function BookingWizard() {
       case 2: return holder.trim() && email.includes('@') && phone.trim() && (!isCompany || nip.trim());
       case 3: {
         if (startTime === null || endTime === null || startTime >= endTime) return false;
+        if (intervalHasConflict(startTime, endTime)) return false;
         if (reservationType === 'SINGLE') return !!startDateStr;
         if (reservationType === 'SUBSCRIPTION') return selectedDays.length > 0;
         if (reservationType === 'PERIODIC') return !!startDateStr && !!endDateStr && selectedDays.length > 0;
@@ -67,15 +188,6 @@ export default function BookingWizard() {
       }
       default: return true;
     }
-  };
-
-  const generateTimeSlots = () => {
-    if (!selectedArea) return [];
-    const slots: number[] = [];
-    for (let m = selectedArea.available_from; m < selectedArea.available_to; m += 15) {
-      slots.push(m);
-    }
-    return slots;
   };
 
   const generateCalendarDays = () => {
@@ -99,7 +211,9 @@ export default function BookingWizard() {
       let count = 0;
       const cur = new Date(startDateStr);
       const end = new Date(endDateStr);
-      const mMap: Record<number, DayOfWeek | undefined> = { 0: 'SUNDAY', 1: 'MONDAY', 2: 'TUESDAY', 3: 'WEDNESDAY', 4: 'THURSDAY', 6: 'SATURDAY' };
+      const mMap: Record<number, DayOfWeek | undefined> = {
+        0: 'SUNDAY', 1: 'MONDAY', 2: 'TUESDAY', 3: 'WEDNESDAY', 4: 'THURSDAY', 5: 'FRIDAY', 6: 'SATURDAY',
+      };
       while (cur <= end) {
         const d = mMap[cur.getDay()];
         if (d && selectedDays.includes(d)) count++;
@@ -112,10 +226,41 @@ export default function BookingWizard() {
   };
 
   const handleSubmit = () => {
-    // Mock submission
-    const num = `MOSiR-2025-${Math.floor(1000 + Math.random() * 9000)}`;
-    setReservationNumber(num);
-    setSubmitted(true);
+    if (!selectedArea || reservationType === null || startTime === null || endTime === null) return;
+    if (startTime >= endTime || intervalHasConflict(startTime, endTime)) return;
+    setSubmitError('');
+    try {
+      const dto = buildBookingReservationDTO({
+        reservationType,
+        areaId: selectedArea.id,
+        holder,
+        email,
+        phone,
+        nip: isCompany ? nip : null,
+        startDateStr,
+        endDateStr,
+        selectedDays,
+        startTime,
+        endTime,
+        backendTimeIsHours,
+      });
+      createMutation.mutate(dto, {
+        onSuccess: res => {
+          const num =
+            (typeof res.reservationNumber === 'string' && res.reservationNumber) ||
+            (typeof res.id === 'string'
+              ? `MOSiR-${res.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`
+              : 'MOSiR-00000000');
+          setReservationNumber(num);
+          setSubmitted(true);
+        },
+        onError: err => {
+          setSubmitError(err instanceof Error ? err.message : 'Nie udało się złożyć rezerwacji.');
+        },
+      });
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Nie udało się złożyć rezerwacji.');
+    }
   };
 
   if (submitted) {
@@ -142,7 +287,11 @@ export default function BookingWizard() {
     );
   }
 
-  const facilityName = selectedFacility ? mockFacilities.find(f => f.id === selectedFacility)?.name : '';
+  const facilityName = selectedArea
+    ? facilities.find(f => f.id === selectedArea.facility_id)?.name ?? ''
+    : selectedFacility
+      ? facilities.find(f => f.id === selectedFacility)?.name ?? ''
+      : '';
 
   return (
     <div className="min-h-screen bg-surface pt-20 pb-12">
@@ -183,43 +332,66 @@ export default function BookingWizard() {
               <h2 className="font-display text-2xl font-bold tracking-[-0.02em] mb-1">Wybierz obiekt</h2>
               <p className="font-body text-sm text-muted-foreground mb-6">Wybierz obiekt i salę, którą chcesz zarezerwować.</p>
               <div className="space-y-4">
-                {mockFacilities.map(facility => (
-                  <div key={facility.id}>
-                    <button
-                      onClick={() => { setSelectedFacility(facility.id); setSelectedArea(null); }}
-                      className={cn(
-                        'w-full text-left p-4 rounded-xl transition-colors',
-                        selectedFacility === facility.id ? 'bg-surface-low card-accent-active' : 'bg-surface-low card-accent hover:bg-surface-high/50'
-                      )}
-                    >
-                      <h3 className="font-display font-semibold text-foreground">{facility.name}</h3>
-                    </button>
-                    {selectedFacility === facility.id && (
-                      <div className="ml-4 mt-3 space-y-2">
-                        {mockAreas.filter(a => a.facility_id === facility.id).map(area => (
-                          <button
-                            key={area.id}
-                            onClick={() => setSelectedArea(area)}
-                            className={cn(
-                              'w-full text-left p-4 rounded-xl transition-colors flex items-center justify-between',
-                              selectedArea?.id === area.id ? 'bg-accent card-accent-active' : 'bg-surface-low hover:bg-surface-high/50'
-                            )}
-                          >
-                            <div>
-                              <span className="font-display font-medium text-foreground">{area.name}</span>
-                              <span className="block font-body text-xs text-muted-foreground">
-                                {minutesToTime(area.available_from)} – {minutesToTime(area.available_to)}
+                {facilitiesLoading && (
+                  <p className="font-body text-sm text-muted-foreground">Ładowanie obiektów…</p>
+                )}
+                {facilitiesError && (
+                  <p className="font-body text-sm text-destructive">Nie udało się pobrać listy obiektów.</p>
+                )}
+                {!facilitiesLoading && !facilitiesError && facilities.length === 0 && (
+                  <p className="font-body text-sm text-muted-foreground">Brak dostępnych obiektów.</p>
+                )}
+                {facilities.map(facility => {
+                  const facilityAreas = areasByFacilityId.get(facility.id) ?? [];
+                  return (
+                    <div key={facility.id}>
+                      <button
+                        onClick={() => { setSelectedFacility(facility.id); setSelectedArea(null); }}
+                        className={cn(
+                          'w-full text-left p-4 rounded-xl transition-colors',
+                          selectedFacility === facility.id ? 'bg-surface-low card-accent-active' : 'bg-surface-low card-accent hover:bg-surface-high/50'
+                        )}
+                      >
+                        <h3 className="font-display font-semibold text-foreground">{facility.name}</h3>
+                      </button>
+                      {selectedFacility === facility.id && (
+                        <div className="ml-4 mt-3 space-y-2">
+                          {areasLoading && (
+                            <p className="font-body text-xs text-muted-foreground py-2">Ładowanie stref…</p>
+                          )}
+                          {!areasLoading && areasError && (
+                            <p className="font-body text-xs text-destructive py-2">Nie udało się pobrać stref.</p>
+                          )}
+                          {!areasLoading && !areasError && facilityAreas.length === 0 && (
+                            <p className="font-body text-xs text-muted-foreground py-2">Brak stref.</p>
+                          )}
+                          {!areasLoading && !areasError && facilityAreas.map(area => (
+                            <button
+                              key={area.id}
+                              onClick={() => { setSelectedFacility(facility.id); setSelectedArea(area); }}
+                              className={cn(
+                                'w-full text-left p-4 rounded-xl transition-colors flex items-center justify-between',
+                                selectedArea?.id === area.id
+                                  ? 'bg-accent card-accent-active'
+                                  : 'bg-surface-low hover:bg-surface-high/50'
+                              )}
+                            >
+                              <div>
+                                <span className="font-display font-medium text-foreground">{area.name}</span>
+                                <span className="block font-body text-xs text-muted-foreground">
+                                  {minutesToTime(area.available_from)} – {minutesToTime(area.available_to)}
+                                </span>
+                              </div>
+                              <span className="font-display font-bold text-sm text-secondary-container bg-secondary/15 px-3 py-1 rounded-full">
+                                {(area.price * 4).toFixed(0)} zł/h
                               </span>
-                            </div>
-                            <span className="font-display font-bold text-sm text-secondary-container bg-secondary/15 px-3 py-1 rounded-full">
-                              {(area.price * 4).toFixed(0)} zł/h
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -366,7 +538,7 @@ export default function BookingWizard() {
                   <p className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-3">
                     {reservationType === 'PERIODIC' ? 'Wybierz zakres dat' : 'Wybierz datę'}
                   </p>
-                  
+
                   {/* Custom Calendar Card */}
                   <div className="bg-surface-lowest shadow-ambient rounded-2xl p-5 border border-surface-high">
                     <div className="flex justify-between items-center mb-4">
@@ -421,7 +593,7 @@ export default function BookingWizard() {
                           const dateObj = new Date(year, month, d);
                           // Adjust for local timezone string comparison
                           const dateStr = [dateObj.getFullYear(), String(dateObj.getMonth() + 1).padStart(2, '0'), String(dateObj.getDate()).padStart(2, '0')].join('-');
-                          
+
                           const isStart = startDateStr === dateStr;
                           const isEnd = endDateStr === dateStr;
                           const isBetween = reservationType === 'PERIODIC' && startDateStr && endDateStr && dateStr > startDateStr && dateStr < endDateStr;
@@ -455,54 +627,94 @@ export default function BookingWizard() {
                 </div>
               )}
 
-              {/* Time Slots (Range Picker Visual Grid) */}
+              {/* Time Slots — ten sam układ co w mocku (gradient zakresu, siatka 4/6/8); zajętość z API + walidacja kolizji */}
               <div>
                 <p className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-3">Wybierz zakres czasu</p>
+
+                {reservationType === 'SINGLE' && !startDateStr && (
+                  <p className="font-body text-xs text-muted-foreground mb-3">
+                    Wybierz dzień w kalendarzu — wtedy pokażemy zajęte kwadranse dla tej doby.
+                  </p>
+                )}
+                {(reservationType === 'SUBSCRIPTION' || reservationType === 'PERIODIC') && selectedDays.length === 0 && (
+                  <p className="font-body text-xs text-muted-foreground mb-3">
+                    Wybierz dni tygodnia — wtedy uwzględnimy kolizje z istniejącymi rezerwacjami.
+                  </p>
+                )}
+
                 <div className="bg-surface-lowest shadow-ambient rounded-2xl p-5 border border-surface-high">
                   <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-y-2">
-                    {generateTimeSlots().map((slot, index, arr) => {
-                      const isTaken = takenSlots.includes(slot);
+                    {timeSlots.map(slot => {
+                      const isTaken = takenSet.has(slot);
                       const isStart = startTime === slot;
                       const isEndBlock = endTime !== null && slot === endTime - 15;
-                      const isBetween = startTime !== null && endTime !== null && slot > startTime && slot < endTime - 15;
+                      const isBetween =
+                        startTime !== null &&
+                        endTime !== null &&
+                        slot > startTime &&
+                        slot < endTime - 15;
                       const isSelected = isStart || isEndBlock || isBetween;
 
                       const handleTimeClick = () => {
+                        if (isTaken) return;
                         if (startTime === null) {
+                          if (intervalHasConflict(slot, slot + 15)) return;
                           setStartTime(slot);
                           setEndTime(slot + 15);
-                        } else if (endTime !== null && endTime > startTime + 15) {
+                          return;
+                        }
+                        if (endTime !== null && endTime > startTime + 15) {
+                          if (intervalHasConflict(slot, slot + 15)) return;
                           setStartTime(slot);
                           setEndTime(slot + 15);
-                        } else if (startTime === slot && endTime === slot + 15) {
+                          return;
+                        }
+                        if (startTime === slot && endTime === slot + 15) {
                           setStartTime(null);
                           setEndTime(null);
-                        } else {
-                          const proposedEnd = slot + 15;
-                          if (proposedEnd <= startTime) return;
-                          const hasTaken = takenSlots.some(t => t >= startTime && t < proposedEnd);
-                          if (hasTaken) return;
-                          setEndTime(proposedEnd);
+                          return;
                         }
+                        const proposedEnd = slot + 15;
+                        if (proposedEnd <= startTime) return;
+                        if (intervalHasConflict(startTime, proposedEnd)) return;
+                        setEndTime(proposedEnd);
                       };
 
                       return (
-                        <div key={slot} className={cn(
-                          "h-10 flex items-center justify-center relative",
-                          isBetween && "bg-primary/10",
-                          isStart && endTime !== null && endTime > startTime + 15 && "bg-gradient-to-r from-transparent 50% to-primary/10",
-                          isEndBlock && startTime !== null && endTime > startTime + 15 && "bg-gradient-to-l from-transparent 50% to-primary/10",
-                        )}>
+                        <div
+                          key={slot}
+                          className={cn(
+                            'h-10 flex items-center justify-center relative',
+                            isBetween && 'bg-primary/10',
+                            isStart &&
+                              endTime !== null &&
+                              startTime !== null &&
+                              endTime > startTime + 15 &&
+                              'bg-gradient-to-r from-transparent 50% to-primary/10',
+                            isEndBlock &&
+                              startTime !== null &&
+                              endTime !== null &&
+                              endTime > startTime + 15 &&
+                              'bg-gradient-to-l from-transparent 50% to-primary/10',
+                          )}
+                        >
                           <button
+                            type="button"
                             disabled={isTaken}
                             onClick={handleTimeClick}
                             className={cn(
                               'w-full mx-1 py-1.5 rounded-lg font-body text-xs font-medium transition-all relative z-10',
-                              isTaken ? 'bg-surface-high text-muted-foreground/40 line-through cursor-not-allowed' : '',
-                              isStart && !isTaken ? 'border-2 border-primary text-primary bg-surface-lowest shadow-sm' : '',
-                              isEndBlock && !isStart && !isTaken ? 'bg-primary text-primary-foreground shadow-md' : '',
+                              isTaken
+                                ? 'bg-surface-high text-muted-foreground/40 line-through cursor-not-allowed'
+                                : '',
+                              isStart && !isTaken
+                                ? 'border-2 border-primary text-primary bg-surface-lowest shadow-sm'
+                                : '',
+                              isEndBlock && !isStart && !isTaken
+                                ? 'bg-primary text-primary-foreground shadow-md'
+                                : '',
                               isBetween && !isTaken ? 'text-primary' : '',
-                              !isSelected && !isTaken ? 'text-foreground hover:bg-surface-high' : ''
+                              !isSelected && !isTaken ? 'text-foreground hover:bg-surface-high' : '',
                             )}
                           >
                             {minutesToTime(slot)}
@@ -557,6 +769,7 @@ export default function BookingWizard() {
                   Po złożeniu rezerwacji administrator MOSiR musi ją zaakceptować. Potwierdzenie zostanie wysłane na e-mail.
                 </p>
               </div>
+              {submitError ? <p className="font-body text-xs text-destructive mt-4">{submitError}</p> : null}
             </div>
           )}
         </div>
@@ -575,8 +788,8 @@ export default function BookingWizard() {
               Dalej <ArrowRight size={16} />
             </Button>
           ) : (
-            <Button variant="hero-secondary" onClick={handleSubmit}>
-              Złóż rezerwację
+            <Button variant="hero-secondary" onClick={handleSubmit} disabled={createMutation.isPending}>
+              {createMutation.isPending ? 'Wysyłanie…' : 'Złóż rezerwację'}
             </Button>
           )}
         </div>

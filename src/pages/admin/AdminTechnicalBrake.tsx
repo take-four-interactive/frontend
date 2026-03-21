@@ -1,33 +1,55 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { mockFacilities, mockAreas, mockTakenSlots, mockAdminReservations } from '@/lib/mockData';
+import { api } from '@/lib/api';
 import {
-  type Area, type DayOfWeek, type ReservationType,
-  minutesToTime, DAY_LABELS, RESERVATION_TYPE_LABELS, type Reservation
-} from '@/lib/types';
-import { ArrowLeft, ArrowRight, Check, MapPin, CalendarDays, Clock, Ban } from 'lucide-react';
+  buildTechnicalBrakeDTO,
+  mapAreaFromApi,
+  mapFacilityFromApi,
+  schedulesToTakenMinutesForWeekdays,
+  type ApiArea,
+  type ApiFacility,
+  type ApiSchedule,
+} from '@/lib/apiMappers';
+import { type Area, type DayOfWeek, minutesToTime, DAY_LABELS } from '@/lib/types';
+import { ArrowLeft, ArrowRight, Check, MapPin, Clock, Ban } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAdminProfile } from '@/lib/adminProfile';
 
 const STEPS = [
   { label: 'Sala', icon: MapPin },
   { label: 'Termin', icon: Clock },
 ];
 
-const ALL_DAYS: DayOfWeek[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'SATURDAY', 'SUNDAY'];
+const ALL_DAYS: DayOfWeek[] = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
 
 export default function AdminTechnicalBrake() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [step, setStep] = useState(0);
 
-  // Admin Context
-  const adminFacilityId = localStorage.getItem('mosir_admin_facility');
-  const facility = mockFacilities.find(f => f.id === adminFacilityId);
+  const { facilityId } = useAdminProfile();
 
-  // Step 1
+  const { data: facilitiesRaw = [] } = useQuery({
+    queryKey: ['facilities'],
+    queryFn: () => api.get<ApiFacility[]>('/api/v1/facilities'),
+  });
+  const facilities = useMemo(() => facilitiesRaw.map(mapFacilityFromApi), [facilitiesRaw]);
+  const facility = facilities.find(f => f.id === facilityId);
+
+  const { data: areasRaw = [] } = useQuery({
+    queryKey: ['facility-areas', facilityId],
+    queryFn: () => api.get<ApiArea[]>(`/api/v1/facilities/${facilityId}/areas`),
+    enabled: !!facilityId,
+  });
+  const areas = useMemo(() => areasRaw.map(mapAreaFromApi), [areasRaw]);
+
   const [selectedArea, setSelectedArea] = useState<Area | null>(null);
 
-  // Step 2
+  // Backend time format is minutes from midnight (e.g. 360 => 06:00).
+  const backendTimeIsHours = false;
+
   const [currentMonthDate, setCurrentMonthDate] = useState(new Date());
   const [startDateStr, setStartDateStr] = useState<string | null>(null);
   const [endDateStr, setEndDateStr] = useState<string | null>(null);
@@ -35,20 +57,38 @@ export default function AdminTechnicalBrake() {
   const [startTime, setStartTime] = useState<number | null>(null);
   const [endTime, setEndTime] = useState<number | null>(null);
 
-  // Post
   const [submitted, setSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
-  const areas = adminFacilityId ? mockAreas.filter(a => a.facility_id === adminFacilityId) : [];
-  const takenSlots = selectedArea ? mockTakenSlots[selectedArea.id] || [] : [];
+  const { data: areaSchedulesRaw = [] } = useQuery({
+    queryKey: ['area-schedules', selectedArea?.id],
+    queryFn: () => api.get<ApiSchedule[]>(`/api/v1/areas/${selectedArea!.id}/schedules`),
+    enabled: !!selectedArea?.id,
+  });
+  const selectedWeekdays = useMemo(() => new Set<DayOfWeek>(selectedDays), [selectedDays]);
+  const takenSlots = useMemo(
+    () => schedulesToTakenMinutesForWeekdays(areaSchedulesRaw, selectedWeekdays),
+    [areaSchedulesRaw, selectedWeekdays],
+  );
+
+  const brakeMutation = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.post<Record<string, unknown>>('/api/v1/reservations', body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['area-schedules'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-reservations'] });
+    },
+  });
 
   const canNext = () => {
     switch (step) {
-      case 0: return !!selectedArea;
+      case 0:
+        return !!selectedArea;
       case 1: {
         if (startTime === null || endTime === null || startTime >= endTime) return false;
         return !!startDateStr && !!endDateStr && selectedDays.length > 0;
       }
-      default: return true;
+      default:
+        return true;
     }
   };
 
@@ -61,45 +101,24 @@ export default function AdminTechnicalBrake() {
     return slots;
   };
 
-  const generateCalendarDays = () => {
-    const today = new Date();
-    const days: Date[] = [];
-    for (let i = 0; i < 28; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
-      days.push(d);
-    }
-    return days;
-  };
-
   const handleSubmit = () => {
-    // Generate technical brake
-    const num = `PRZERWA-${Math.floor(1000 + Math.random() * 9000)}`;
-    const newBrake: Reservation = {
-      id: crypto.randomUUID(),
-      reservationNumber: num,
-      reservationHolder: 'SYSTEM (Przerwa Techniczna)',
-      area_id: selectedArea!.id,
-      phoneNumber: '---',
-      email: 'admin@mosir.pl',
-      nip: null,
-      reservationType: 'TECHNICAL_BRAKE',
-      status: 'CONFIRMED', // Technical brake is auto confirmed
-      createdAt: new Date().toISOString().split('T')[0],
-      schedules: [
-        {
-          id: crypto.randomUUID(),
-          day_of_week: 'MONDAY', // simplified
-          starts_at: startTime!,
-          ends_at: endTime!,
-          reservation_id: ''
-        }
-      ],
-      area: selectedArea!,
-      facility: facility
-    };
-    mockAdminReservations.push(newBrake);
-    setSubmitted(true);
+    if (!selectedArea || startTime === null || endTime === null || !startDateStr || !endDateStr) return;
+    setSubmitError('');
+    const dto = buildTechnicalBrakeDTO({
+      areaId: selectedArea.id,
+      startDateStr,
+      endDateStr,
+      selectedDays,
+      startTime,
+      endTime,
+      backendTimeIsHours,
+    });
+    brakeMutation.mutate(dto, {
+      onSuccess: () => setSubmitted(true),
+      onError: err => {
+        setSubmitError(err instanceof Error ? err.message : 'Nie udało się zablokować terminu.');
+      },
+    });
   };
 
   if (submitted) {
@@ -111,7 +130,9 @@ export default function AdminTechnicalBrake() {
           </div>
           <h2 className="font-display text-2xl font-bold text-foreground mb-2">Przerwa zablokowana</h2>
           <p className="font-body text-sm text-muted-foreground mb-8">Wybrane terminy są teraz niedostępne dla klientów.</p>
-          <Button variant="default" onClick={() => navigate('/admin/dostepnosc')}>Wróć do kalendarza</Button>
+          <Button variant="default" onClick={() => navigate('/admin/dostepnosc')}>
+            Wróć do kalendarza
+          </Button>
         </div>
       </div>
     );
@@ -120,29 +141,29 @@ export default function AdminTechnicalBrake() {
   return (
     <div className="pb-12 animate-fade-in max-w-3xl mx-auto">
       <h2 className="font-display text-2xl font-bold text-foreground mb-6">Dodaj przerwę techniczną</h2>
-      
-      {/* Progress */}
+
       <div className="bg-surface-lowest shadow-sm rounded-2xl p-5 mb-8 border border-surface-high">
         <div className="flex items-center justify-between">
           {STEPS.map((s, i) => (
             <div key={i} className="flex items-center gap-2">
-              <div className={cn(
-                'w-8 h-8 rounded-full flex items-center justify-center text-xs font-display font-bold transition-colors',
-                i <= step ? 'bg-primary text-primary-foreground' : 'bg-surface-high text-muted-foreground'
-              )}>
+              <div
+                className={cn(
+                  'w-8 h-8 rounded-full flex items-center justify-center text-xs font-display font-bold transition-colors',
+                  i <= step ? 'bg-primary text-primary-foreground' : 'bg-surface-high text-muted-foreground',
+                )}
+              >
                 {i < step ? <Check size={14} /> : i + 1}
               </div>
-              <span className={cn(
-                'hidden sm:block font-body text-xs',
-                i <= step ? 'text-foreground font-medium' : 'text-muted-foreground'
-              )}>
+              <span
+                className={cn(
+                  'hidden sm:block font-body text-xs',
+                  i <= step ? 'text-foreground font-medium' : 'text-muted-foreground',
+                )}
+              >
                 {s.label}
               </span>
               {i < STEPS.length - 1 && (
-                <div className={cn(
-                  'hidden sm:block w-8 h-px mx-2',
-                  i < step ? 'bg-primary/30' : 'bg-surface-high'
-                )} />
+                <div className={cn('hidden sm:block w-8 h-px mx-2', i < step ? 'bg-primary/30' : 'bg-surface-high')} />
               )}
             </div>
           ))}
@@ -150,19 +171,21 @@ export default function AdminTechnicalBrake() {
       </div>
 
       <div className="bg-surface-lowest rounded-2xl p-6 md:p-8 shadow-sm border border-surface-high">
-        
-        {/* Step 0: Area */}
         {step === 0 && (
           <div className="animate-fade-in">
             <h3 className="font-display text-xl font-bold mb-4">Wybierz salę / strefę</h3>
+            <p className="font-body text-xs text-muted-foreground mb-4">{facility?.name}</p>
             <div className="space-y-3">
               {areas.map(area => (
                 <button
                   key={area.id}
+                  type="button"
                   onClick={() => setSelectedArea(area)}
                   className={cn(
                     'w-full text-left p-4 rounded-xl transition-colors border',
-                    selectedArea?.id === area.id ? 'bg-primary/5 border-primary card-accent-active' : 'bg-surface-low border-transparent hover:border-surface-high'
+                    selectedArea?.id === area.id
+                      ? 'bg-primary/5 border-primary card-accent-active'
+                      : 'bg-surface-low border-transparent hover:border-surface-high',
                   )}
                 >
                   <span className="font-display font-bold text-foreground block">{area.name}</span>
@@ -176,7 +199,6 @@ export default function AdminTechnicalBrake() {
           </div>
         )}
 
-        {/* Step 1: Date & Time */}
         {step === 1 && (
           <div className="animate-fade-in">
             <h3 className="font-display text-xl font-bold mb-6">Wskaż terminy niedostępności</h3>
@@ -187,10 +209,15 @@ export default function AdminTechnicalBrake() {
                 {ALL_DAYS.map(day => (
                   <button
                     key={day}
-                    onClick={() => setSelectedDays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])}
+                    type="button"
+                    onClick={() =>
+                      setSelectedDays(prev => (prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]))
+                    }
                     className={cn(
                       'px-4 py-2 rounded-full font-body text-sm font-medium transition-colors',
-                      selectedDays.includes(day) ? 'bg-primary text-primary-foreground shadow-md' : 'bg-surface-high text-muted-foreground hover:bg-surface-high/80'
+                      selectedDays.includes(day)
+                        ? 'bg-primary text-primary-foreground shadow-md'
+                        : 'bg-surface-high text-muted-foreground hover:bg-surface-high/80',
                     )}
                   >
                     {DAY_LABELS[day]}
@@ -200,26 +227,34 @@ export default function AdminTechnicalBrake() {
             </div>
 
             <div className="mb-10 max-w-sm">
-              <p className="font-body text-xs font-medium uppercase text-muted-foreground mb-3">
-                Wybierz zakres dat przerwy
-              </p>
-              
+              <p className="font-body text-xs font-medium uppercase text-muted-foreground mb-3">Wybierz zakres dat przerwy</p>
+
               <div className="bg-surface-lowest shadow-ambient rounded-2xl p-5 border border-surface-high">
                 <div className="flex justify-between items-center mb-4">
-                  <button onClick={() => setCurrentMonthDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))} className="p-2 hover:bg-surface-low rounded-lg transition-colors text-primary">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentMonthDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
+                    className="p-2 hover:bg-surface-low rounded-lg transition-colors text-primary"
+                  >
                     <ArrowLeft size={18} />
                   </button>
                   <span className="font-display font-semibold text-foreground text-sm uppercase tracking-wide">
                     {currentMonthDate.toLocaleString('pl-PL', { month: 'long', year: 'numeric' })}
                   </span>
-                  <button onClick={() => setCurrentMonthDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))} className="p-2 hover:bg-surface-low rounded-lg transition-colors text-primary">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentMonthDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
+                    className="p-2 hover:bg-surface-low rounded-lg transition-colors text-primary"
+                  >
                     <ArrowRight size={18} />
                   </button>
                 </div>
 
                 <div className="grid grid-cols-7 gap-y-2 mb-2">
                   {['Nd', 'Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'Sb'].map(d => (
-                    <span key={d} className="text-center font-body text-xs font-medium text-muted-foreground">{d}</span>
+                    <span key={d} className="text-center font-body text-xs font-medium text-muted-foreground">
+                      {d}
+                    </span>
                   ))}
                 </div>
 
@@ -248,37 +283,48 @@ export default function AdminTechnicalBrake() {
                       }
                     };
 
-                    return [...daysPre.map((_, i) => <span key={`pre-${i}`} />), ...daysIds.map(d => {
-                      const dateObj = new Date(year, month, d);
-                      const dateStr = [dateObj.getFullYear(), String(dateObj.getMonth() + 1).padStart(2, '0'), String(dateObj.getDate()).padStart(2, '0')].join('-');
-                      
-                      const isStart = startDateStr === dateStr;
-                      const isEnd = endDateStr === dateStr;
-                      const isBetween = startDateStr && endDateStr && dateStr > startDateStr && dateStr < endDateStr;
-                      const isSelected = isStart || isEnd || isBetween;
+                    return [
+                      ...daysPre.map((_, i) => <span key={`pre-${i}`} />),
+                      ...daysIds.map(d => {
+                        const dateObj = new Date(year, month, d);
+                        const dateStr = [
+                          dateObj.getFullYear(),
+                          String(dateObj.getMonth() + 1).padStart(2, '0'),
+                          String(dateObj.getDate()).padStart(2, '0'),
+                        ].join('-');
 
-                      return (
-                        <div key={d} className={cn(
-                          "h-10 flex items-center justify-center relative",
-                          isBetween && "bg-primary/10",
-                          isStart && endDateStr && "bg-gradient-to-r from-transparent 50% to-primary/10",
-                          isEnd && startDateStr && "bg-gradient-to-l from-transparent 50% to-primary/10",
-                        )}>
-                          <button
-                            onClick={() => handleDateClick(dateStr)}
+                        const isStart = startDateStr === dateStr;
+                        const isEnd = endDateStr === dateStr;
+                        const isBetween = startDateStr && endDateStr && dateStr > startDateStr && dateStr < endDateStr;
+                        const isSelected = isStart || isEnd || isBetween;
+
+                        return (
+                          <div
+                            key={d}
                             className={cn(
-                              'w-8 h-8 rounded-lg font-body text-sm transition-all flex items-center justify-center relative z-10',
-                              isStart ? 'border-2 border-red-600 text-red-600 font-bold shadow-sm bg-surface-lowest' : '',
-                              isEnd ? 'bg-red-600 text-white font-bold shadow-md' : '',
-                              !isStart && !isEnd && isBetween ? 'text-red-700' : '',
-                              !isSelected ? 'text-foreground hover:bg-surface-high/50' : ''
+                              'h-10 flex items-center justify-center relative',
+                              isBetween && 'bg-primary/10',
+                              isStart && endDateStr && 'bg-gradient-to-r from-transparent 50% to-primary/10',
+                              isEnd && startDateStr && 'bg-gradient-to-l from-transparent 50% to-primary/10',
                             )}
                           >
-                            {d}
-                          </button>
-                        </div>
-                      );
-                    })];
+                            <button
+                              type="button"
+                              onClick={() => handleDateClick(dateStr)}
+                              className={cn(
+                                'w-8 h-8 rounded-lg font-body text-sm transition-all flex items-center justify-center relative z-10',
+                                isStart ? 'border-2 border-red-600 text-red-600 font-bold shadow-sm bg-surface-lowest' : '',
+                                isEnd ? 'bg-red-600 text-white font-bold shadow-md' : '',
+                                !isStart && !isEnd && isBetween ? 'text-red-700' : '',
+                                !isSelected ? 'text-foreground hover:bg-surface-high/50' : '',
+                              )}
+                            >
+                              {d}
+                            </button>
+                          </div>
+                        );
+                      }),
+                    ];
                   })()}
                 </div>
               </div>
@@ -288,7 +334,7 @@ export default function AdminTechnicalBrake() {
               <p className="font-body text-xs font-medium uppercase text-muted-foreground mb-3">Zakres zablokowanych godzin</p>
               <div className="bg-surface-lowest shadow-ambient rounded-2xl p-5 border border-surface-high">
                 <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-y-2">
-                  {generateTimeSlots().map((slot) => {
+                  {generateTimeSlots().map(slot => {
                     const isTaken = takenSlots.includes(slot);
                     const isStart = startTime === slot;
                     const isEndBlock = endTime !== null && slot === endTime - 15;
@@ -315,13 +361,17 @@ export default function AdminTechnicalBrake() {
                     };
 
                     return (
-                      <div key={slot} className={cn(
-                        "h-10 flex items-center justify-center relative",
-                        isBetween && "bg-red-500/10",
-                        isStart && endTime !== null && endTime > startTime + 15 && "bg-gradient-to-r from-transparent 50% to-red-500/10",
-                        isEndBlock && startTime !== null && endTime > startTime + 15 && "bg-gradient-to-l from-transparent 50% to-red-500/10",
-                      )}>
+                      <div
+                        key={slot}
+                        className={cn(
+                          'h-10 flex items-center justify-center relative',
+                          isBetween && 'bg-red-500/10',
+                          isStart && endTime !== null && endTime > startTime + 15 && 'bg-gradient-to-r from-transparent 50% to-red-500/10',
+                          isEndBlock && startTime !== null && endTime > startTime + 15 && 'bg-gradient-to-l from-transparent 50% to-red-500/10',
+                        )}
+                      >
                         <button
+                          type="button"
                           disabled={isTaken}
                           onClick={handleTimeClick}
                           className={cn(
@@ -330,7 +380,7 @@ export default function AdminTechnicalBrake() {
                             isStart && !isTaken ? 'border-2 border-red-600 text-red-600 bg-surface-lowest shadow-sm' : '',
                             isEndBlock && !isStart && !isTaken ? 'bg-red-600 text-white shadow-md' : '',
                             isBetween && !isTaken ? 'text-red-700' : '',
-                            !isSelected && !isTaken ? 'text-foreground hover:bg-surface-high' : ''
+                            !isSelected && !isTaken ? 'text-foreground hover:bg-surface-high' : '',
                           )}
                         >
                           {minutesToTime(slot)}
@@ -341,15 +391,13 @@ export default function AdminTechnicalBrake() {
                 </div>
               </div>
             </div>
+            {submitError ? <p className="font-body text-xs text-destructive mt-4">{submitError}</p> : null}
           </div>
         )}
       </div>
 
       <div className="flex justify-between mt-6">
-        <Button
-          variant="outline"
-          onClick={() => step === 0 ? navigate('/admin/dostepnosc') : setStep(step - 1)}
-        >
+        <Button variant="outline" onClick={() => (step === 0 ? navigate('/admin/dostepnosc') : setStep(step - 1))}>
           <ArrowLeft size={16} className="mr-2" />
           {step === 0 ? 'Anuluj' : 'Wstecz'}
         </Button>
@@ -358,8 +406,8 @@ export default function AdminTechnicalBrake() {
             Dalej <ArrowRight size={16} className="ml-2" />
           </Button>
         ) : (
-          <Button variant="destructive" onClick={handleSubmit} disabled={!canNext()}>
-            Zablokuj termin
+          <Button variant="destructive" onClick={handleSubmit} disabled={!canNext() || brakeMutation.isPending}>
+            {brakeMutation.isPending ? 'Zapisywanie…' : 'Zablokuj termin'}
           </Button>
         )}
       </div>
