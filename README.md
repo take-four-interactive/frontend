@@ -45,7 +45,7 @@ Utwórz plik `.env.local` w katalogu głównym projektu i dodaj adres API:
 VITE_API_URL=https://unaverred-armida-clownishly.ngrok-free.dev
 ```
 
-Gdzie `http://localhost:8000` to adres, pod którym dostępny jest backend (dostosuj do swojego środowiska).
+Gdzie `https://unaverred-armida-clownishly.ngrok-free.dev` to adres, pod którym dostępny jest backend.
 
 ### Uruchomienie
 
