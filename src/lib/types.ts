@@ -22,7 +22,7 @@ export interface Admin {
 
 export type ReservationType = 'SINGLE' | 'PERIODIC' | 'SUBSCRIPTION' | 'TECHNICAL_BRAKE';
 export type ReservationStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED';
-export type DayOfWeek = 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY' | 'SATURDAY' | 'SUNDAY';
+export type DayOfWeek = 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY' | 'FRIDAY' | 'SATURDAY' | 'SUNDAY';
 
 export interface Schedule {
   id: string; // UUID
@@ -41,7 +41,7 @@ export interface Payment {
 
 export interface Reservation {
   id: string; // UUID
-  reservationNumber: string; // For MOSiR-YYYY-NNN UI Display
+  reservationNumber: string; // Numer z API lub identyfikator rezerwacji (np. UUID)
   reservationHolder: string;
   area_id: string; // UUID
   phoneNumber: string;
@@ -104,6 +104,7 @@ export const DAY_LABELS: Record<DayOfWeek, string> = {
   TUESDAY: 'Wtorek',
   WEDNESDAY: 'Środa',
   THURSDAY: 'Czwartek',
+  FRIDAY: 'Piątek',
   SATURDAY: 'Sobota',
   SUNDAY: 'Niedziela',
 };

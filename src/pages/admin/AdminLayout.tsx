@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, List, CalendarDays, Settings, LogOut, Menu, X } from 'lucide-react';
+import { getAdminSession, clearAdminSession } from '@/lib/cookies';
 import { cn } from '@/lib/utils';
+import { useAdminProfile } from '@/lib/adminProfile';
 
 const NAV_ITEMS = [
   { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -14,12 +16,12 @@ export default function AdminLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const adminName = localStorage.getItem('mosir_admin_name') || 'Admin';
+  const { admin, isPending } = useAdminProfile();
+  const { name: cookieAdminName } = getAdminSession();
+  const adminName = admin?.name || cookieAdminName || (isPending ? 'Admin…' : 'Admin');
 
   const handleLogout = () => {
-    localStorage.removeItem('mosir_admin_token');
-    localStorage.removeItem('mosir_admin_name');
-    localStorage.removeItem('mosir_admin_facility');
+    clearAdminSession();
     navigate('/admin');
   };
 

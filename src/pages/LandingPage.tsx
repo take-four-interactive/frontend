@@ -2,26 +2,13 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Search, ArrowRight, CalendarDays, ClipboardCheck, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { mockFacilities, mockAreas } from '@/lib/mockData';
-import { minutesToTime } from '@/lib/types';
 import heroImage from '@/assets/hero-sports.jpg';
-import poolImage from '@/assets/facility-pool.jpg';
-import tennisImage from '@/assets/facility-tennis.jpg';
-import stadiumImage from '@/assets/facility-stadium.jpg';
 import { useScrollReveal } from '@/hooks/useScrollReveal';
-
-const facilityImages: Record<string, string> = {
-  '1': heroImage,
-  '2': poolImage,
-  '3': stadiumImage,
-  '4': tennisImage,
-};
 
 export default function LandingPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const navigate = useNavigate();
   const heroRef = useScrollReveal();
-  const facilitiesRef = useScrollReveal();
   const howRef = useScrollReveal();
   const searchRef = useScrollReveal();
 

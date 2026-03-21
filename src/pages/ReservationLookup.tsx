@@ -1,8 +1,15 @@
-import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import StatusBadge from '@/components/StatusBadge';
-import { mockReservation, mockAdminReservations } from '@/lib/mockData';
+import { api } from '@/lib/api';
+import {
+  mapReservationFromApi,
+  mapScheduleFromApi,
+  reservationNumberFromApi,
+  type ApiReservation,
+  type ApiSchedule,
+} from '@/lib/apiMappers';
 import { minutesToTime, DAY_LABELS, RESERVATION_TYPE_LABELS } from '@/lib/types';
 import type { Reservation } from '@/lib/types';
 import { ArrowLeft, WalletCards, MapPin, User, CalendarRange, Info, Ban, ReceiptText, CalendarClock } from 'lucide-react';
@@ -10,41 +17,53 @@ import { ArrowLeft, WalletCards, MapPin, User, CalendarRange, Info, Ban, Receipt
 export default function ReservationLookup() {
   const { number } = useParams();
   const navigate = useNavigate();
-  const [reservation, setReservation] = useState<Reservation | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    // Mock fetch
-    setTimeout(() => {
-      if (number) {
-        const found = mockAdminReservations.find(r => r.reservationNumber === number);
-        if (found) {
-          setReservation({ ...found });
-        } else if (number.startsWith('MOSiR-')) {
-          const newMock: Reservation = { ...mockReservation, reservationNumber: number };
-          mockAdminReservations.push(newMock);
-          setReservation(newMock);
-        } else {
-          setError('Nie znaleziono rezerwacji o podanym numerze.');
-        }
-      } else {
-        setError('Nie znaleziono rezerwacji o podanym numerze.');
+  const {
+    data: reservation,
+    isPending: loading,
+    isError,
+    error,
+  } = useQuery({
+    queryKey: ['public-reservation', number],
+    queryFn: async (): Promise<Reservation> => {
+      if (!number) throw new Error('Nie znaleziono rezerwacji o podanym numerze.');
+      const list = await api.get<ApiReservation[]>('/api/v1/reservations');
+      const match = list.find(
+        r =>
+          reservationNumberFromApi(r).toLowerCase() === number.toLowerCase() ||
+          r.id === number,
+      );
+      if (!match) throw new Error('Nie znaleziono rezerwacji o podanym numerze.');
+      const aid = match.area?.id;
+      let schedules = [];
+      if (aid) {
+        const slist = await api.get<ApiSchedule[]>(`/api/v1/areas/${aid}/schedules`);
+        schedules = slist.filter(s => s.reservation?.id === match.id).map(s => mapScheduleFromApi(s, match.id));
       }
-      setLoading(false);
-    }, 800);
-  }, [number]);
+      return mapReservationFromApi(match, schedules);
+    },
+    enabled: !!number,
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/v1/reservations/${id}`),
+    onSuccess: (_, id) => {
+      queryClient.setQueryData<Reservation>(['public-reservation', number], old =>
+        old && old.id === id ? { ...old, status: 'CANCELLED' } : old,
+      );
+      queryClient.invalidateQueries({ queryKey: ['area-schedules'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-reservations'] });
+    },
+  });
 
   const handleCancel = () => {
     if (reservation && (reservation.status === 'PENDING' || reservation.status === 'CONFIRMED')) {
-      const newStatus = 'CANCELLED';
-      setReservation({ ...reservation, status: newStatus });
-      const globalRes = mockAdminReservations.find(r => r.reservationNumber === reservation.reservationNumber);
-      if (globalRes) {
-        globalRes.status = newStatus;
-      }
+      cancelMutation.mutate(reservation.id);
     }
   };
+
+  const errMsg = isError && error instanceof Error ? error.message : '';
 
   if (loading) {
     return (
@@ -58,7 +77,7 @@ export default function ReservationLookup() {
     );
   }
 
-  if (error || !reservation) {
+  if (errMsg || !reservation) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface pt-16">
         <div className="text-center mx-4 max-w-md">
@@ -66,7 +85,7 @@ export default function ReservationLookup() {
             <Ban size={32} />
           </div>
           <h2 className="font-display text-2xl font-bold text-foreground mb-2">Nie znaleziono</h2>
-          <p className="font-body text-base text-muted-foreground mb-8 text-balance">{error}</p>
+          <p className="font-body text-base text-muted-foreground mb-8 text-balance">{errMsg || 'Nie znaleziono rezerwacji o podanym numerze.'}</p>
           <Button variant="default" size="lg" onClick={() => navigate('/znajdz-rezerwacje')}>Wróć do wyszukiwarki</Button>
         </div>
       </div>
@@ -74,12 +93,16 @@ export default function ReservationLookup() {
   }
 
   const isCanceled = reservation.status === 'CANCELLED';
-  const isPending = reservation.status === 'PENDING';
+  const paid = (reservation.payment?.amount ?? 0) > 0;
+  const bookedHours = reservation.schedules.reduce((sum, s) => sum + Math.max(0, s.ends_at - s.starts_at), 0) / 60;
+  // `area.price` is stored as price per 15 minutes, so convert to hourly rate.
+  const pricePerHour = (reservation.area?.price ?? 0) * 4;
+  const amountToPay = pricePerHour * bookedHours;
 
   return (
     <div className="min-h-screen bg-surface pt-20 pb-20">
       {/* Background Hero */}
-      <div className="absolute top-0 left-0 right-0 h-[450px] bg-gradient-to-br from-[#22338b] to-[#141e54] pointer-events-none overflow-hidden">
+      <div className="absolute top-0 left-0 right-0 h-[500px] bg-gradient-to-br from-[#22338b] to-[#141e54] pointer-events-none overflow-hidden">
         <div className="absolute inset-0 opacity-10 bg-[url('@/assets/hero-sports.jpg')] bg-cover bg-center mix-blend-overlay"></div>
       </div>
 
@@ -89,12 +112,14 @@ export default function ReservationLookup() {
         </button>
 
         {/* Title Header */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10 text-white animate-fade-in-up">
-          <div>
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] items-start gap-4 md:gap-6 mb-12 text-white animate-fade-in-up">
+          <div className="min-w-0 max-w-full overflow-hidden">
             <span className="font-body text-xs font-semibold tracking-widest text-white/50 uppercase mb-2 block">Szczegóły rezerwacji</span>
-            <h1 className="font-display text-3xl md:text-5xl font-extrabold tracking-[-0.02em]">{reservation.reservationNumber}</h1>
+            <h1 className="font-display text-3xl md:text-5xl font-extrabold tracking-[-0.02em] leading-tight [overflow-wrap:anywhere]">
+              {reservation.reservationNumber}
+            </h1>
           </div>
-          <div className="flex-shrink-0">
+          <div className="justify-self-start md:justify-self-end md:self-start bg-white/95 rounded-full px-2 py-1 shadow-sm">
             <StatusBadge status={reservation.status} />
           </div>
         </div>
@@ -127,7 +152,9 @@ export default function ReservationLookup() {
                       {RESERVATION_TYPE_LABELS[reservation.reservationType]}
                     </span>
                     <span className="block font-body text-sm text-foreground/80 mt-1">
-                      {reservation.schedules.map(s => `${DAY_LABELS[s.day_of_week]}`).join(', ')}
+                      {reservation.schedules.length
+                        ? reservation.schedules.map(s => `${DAY_LABELS[s.day_of_week]}`).join(', ')
+                        : '—'}
                     </span>
                   </div>
                 </div>
@@ -137,11 +164,18 @@ export default function ReservationLookup() {
                   <div>
                     <span className="block font-body text-xs text-muted-foreground mb-1 uppercase tracking-wider">Godziny i Data</span>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {reservation.schedules.map((s, i) => (
-                        <span key={i} className="inline-flex items-center px-2.5 py-1 rounded-md bg-surface-high font-body text-sm font-medium text-foreground">
-                          {minutesToTime(s.starts_at)} – {minutesToTime(s.ends_at)}
-                        </span>
-                      ))}
+                      {reservation.schedules.length ? (
+                        reservation.schedules.map((s, i) => (
+                          <span
+                            key={i}
+                            className="inline-flex items-center px-2.5 py-1 rounded-md bg-surface-high font-body text-sm font-medium text-foreground"
+                          >
+                            {minutesToTime(s.starts_at)} – {minutesToTime(s.ends_at)}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="font-body text-sm text-muted-foreground">—</span>
+                      )}
                     </div>
                     <span className="block font-body text-xs text-muted-foreground mt-3">
                       Złożono: {reservation.createdAt}
@@ -198,7 +232,7 @@ export default function ReservationLookup() {
                   </div>
                   <h3 className="font-display font-bold text-lg text-foreground">Finanse</h3>
                 </div>
-                {reservation.payment ? (
+                {paid ? (
                   <span className="bg-green-100 text-green-700 text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full border border-green-200">Opłacone</span>
                 ) : (
                   <span className="bg-orange-100 text-orange-700 text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full border border-orange-200">Do zapłaty</span>
@@ -209,12 +243,22 @@ export default function ReservationLookup() {
                 <div className="flex justify-between items-end mb-1">
                   <span className="font-body text-sm text-muted-foreground">Całkowity koszt</span>
                   <span className="font-display font-bold text-3xl text-foreground">
-                    {reservation.payment?.amount?.toFixed(2) || '0.00'} <span className="text-lg text-muted-foreground font-medium">zł</span>
+                    {amountToPay.toFixed(2)} <span className="text-lg text-muted-foreground font-medium">zł</span>
                   </span>
                 </div>
               </div>
 
-              {reservation.payment && (
+              {!paid && (
+                <Button
+                  type="button"
+                  variant="default"
+                  className="w-full mb-2"
+                >
+                  Przejdź do płatności
+                </Button>
+              )}
+
+              {paid && (
                 <button className="w-full flex justify-center items-center gap-2 py-3 font-body text-sm font-semibold text-primary hover:bg-primary/5 rounded-xl transition-colors">
                   <ReceiptText size={18} /> Pobierz fakturę / rachunek
                 </button>
@@ -241,6 +285,7 @@ export default function ReservationLookup() {
                   size="xl"
                   className="w-full font-bold shadow-lg shadow-red-500/20"
                   onClick={handleCancel}
+                  disabled={cancelMutation.isPending}
                 >
                   <Ban size={18} className="mr-2" />
                   Anuluj bezpowrotnie

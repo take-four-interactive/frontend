@@ -9,6 +9,7 @@ import {
   parseApiScheduleSlot,
   mapAreaFromApi,
   mapFacilityFromApi,
+  reservationDisplayRef,
   type ApiArea,
   type ApiFacility,
   type ApiSchedule,
@@ -246,12 +247,8 @@ export default function BookingWizard() {
       });
       createMutation.mutate(dto, {
         onSuccess: res => {
-          const num =
-            (typeof res.reservationNumber === 'string' && res.reservationNumber) ||
-            (typeof res.id === 'string'
-              ? `MOSiR-${res.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`
-              : 'MOSiR-00000000');
-          setReservationNumber(num);
+          const ref = reservationDisplayRef(res as { id?: unknown; reservationNumber?: unknown });
+          setReservationNumber(ref || '—');
           setSubmitted(true);
         },
         onError: err => {

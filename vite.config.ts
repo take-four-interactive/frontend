@@ -11,6 +11,15 @@ export default defineConfig(({ mode }) => ({
     hmr: {
       overlay: false,
     },
+    proxy: {
+      '/api': {
+        target: 'https://unaverred-armida-clownishly.ngrok-free.dev',
+        changeOrigin: true,
+        headers: {
+          'ngrok-skip-browser-warning': '69420',
+        },
+      },
+    },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {

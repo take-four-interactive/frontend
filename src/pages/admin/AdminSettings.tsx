@@ -1,14 +1,27 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { mockFacilities, mockAreas } from '@/lib/mockData';
 import { minutesToTime } from '@/lib/types';
+import { api } from '@/lib/api';
+import { mapAreaFromApi, type ApiArea } from '@/lib/apiMappers';
+import { useAdminProfile } from '@/lib/adminProfile';
 
 export default function AdminSettings() {
-  const facility = mockFacilities[0];
-  const adminFacilityId = localStorage.getItem('mosir_admin_facility');
-  const areas = mockAreas.filter(a => a.facility_id === adminFacilityId);
-  const [facilityName, setFacilityName] = useState(facility.name);
+  const { facility, facilityId } = useAdminProfile();
+
+  const { data: areasRaw = [] } = useQuery({
+    queryKey: ['facility-areas', facilityId],
+    queryFn: () => api.get<ApiArea[]>(`/api/v1/facilities/${facilityId}/areas`),
+    enabled: !!facilityId,
+  });
+  const areas = areasRaw.map(mapAreaFromApi);
+
+  const [facilityName, setFacilityName] = useState(facility?.name ?? '');
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (facility?.name) setFacilityName(facility.name);
+  }, [facility?.name]);
 
   const handleSave = () => {
     setSaved(true);
@@ -21,7 +34,9 @@ export default function AdminSettings() {
         <h3 className="font-display text-lg font-bold text-foreground mb-4">Dane obiektu</h3>
         <div className="bg-surface-lowest rounded-2xl p-6 space-y-4">
           <div>
-            <label className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-1.5 block">Nazwa obiektu</label>
+            <label className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground mb-1.5 block">
+              Nazwa obiektu
+            </label>
             <input
               type="text"
               value={facilityName}

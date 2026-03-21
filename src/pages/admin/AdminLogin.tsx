@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { LogIn } from 'lucide-react';
-import { mockAdmins } from '@/lib/mockData';
+import { api } from '@/lib/api';
+import { setAdminSession } from '@/lib/cookies';
 
 export default function AdminLogin() {
   const [name, setName] = useState('');
@@ -15,24 +16,40 @@ export default function AdminLogin() {
     e.preventDefault();
     setLoading(true);
     setError('');
-    // Mock login
-    setTimeout(() => {
-      if (!name.trim()) {
-        setError('Podaj swoje imię.');
+    if (!name.trim()) {
+      setError('Podaj swoje imię.');
+      setLoading(false);
+      return;
+    }
+    try {
+      const data = await api.post<Record<string, unknown>>('/api/v1/admins/login', {
+        name: name.trim(),
+        password,
+      });
+
+      // API returns admin object: { id, name, password, facility: { id, name, imagePath } }
+      const adminId = (data.id ?? data.adminId ?? data.admin_id) as string | undefined;
+      const adminName = (data.name ?? name.trim()) as string;
+      const facilityObj = data.facility as { id?: string } | undefined;
+      const facilityId = (data.facilityId ?? data.facility_id ?? facilityObj?.id) as string | undefined;
+
+      if (!adminId) {
+        setError('Nieprawidłowa odpowiedź serwera.');
         setLoading(false);
         return;
       }
-      const admin = mockAdmins.find(a => a.name === name && a.password === password);
-      if (admin) {
-        localStorage.setItem('mosir_admin_token', 'mock-jwt-token');
-        localStorage.setItem('mosir_admin_name', admin.name);
-        localStorage.setItem('mosir_admin_facility', admin.facility_id);
-        navigate('/admin/dashboard');
-      } else {
-        setError('Podano niepoprawne dane logowania.');
-      }
-      setLoading(false);
-    }, 600);
+
+      setAdminSession({
+        id: String(adminId),
+        name: String(adminName),
+        facilityId: facilityId ? String(facilityId) : undefined,
+      });
+
+      navigate('/admin/dashboard');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Podano niepoprawne dane logowania.');
+    }
+    setLoading(false);
   };
 
   return (

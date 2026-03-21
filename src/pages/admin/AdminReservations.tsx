@@ -1,35 +1,80 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { mockAdminReservations } from '@/lib/mockData';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import StatusBadge from '@/components/StatusBadge';
+import { toast } from '@/components/ui/use-toast';
+import { api } from '@/lib/api';
 import { minutesToTime, RESERVATION_TYPE_LABELS } from '@/lib/types';
 import type { ReservationStatus } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { Search } from 'lucide-react';
+import { Search, Trash2 } from 'lucide-react';
+import { fetchAdminReservationsEnriched } from '@/lib/adminReservations';
+import { useAdminProfile } from '@/lib/adminProfile';
 
 const STATUSES: (ReservationStatus | 'ALL')[] = ['ALL', 'PENDING', 'CONFIRMED', 'CANCELLED'];
-const STATUS_LABEL: Record<string, string> = { ALL: 'Wszystkie', PENDING: 'Oczekujące', CONFIRMED: 'Zaplanowane', CANCELLED: 'Anulowane' };
+const STATUS_LABEL: Record<string, string> = {
+  ALL: 'Wszystkie',
+  PENDING: 'Oczekujące',
+  CONFIRMED: 'Zaplanowane',
+  CANCELLED: 'Anulowane',
+};
 
 export default function AdminReservations() {
   const [statusFilter, setStatusFilter] = useState<ReservationStatus | 'ALL'>('ALL');
   const [search, setSearch] = useState('');
-  const adminFacilityId = localStorage.getItem('mosir_admin_facility');
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
+  const queryClient = useQueryClient();
+  const { adminId, facilityId } = useAdminProfile();
 
-  const filtered = mockAdminReservations.filter(r => {
-    if (adminFacilityId && r.area?.facility_id !== adminFacilityId) return false;
+  const deleteMutation = useMutation({
+    mutationFn: (reservationId: string) => api.delete(`/api/v1/reservations/${reservationId}`),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['admin-reservations'] });
+      await queryClient.invalidateQueries({ queryKey: ['area-schedules'] });
+      setDeleteTarget(null);
+      toast({ title: 'Rezerwacja została usunięta.' });
+    },
+    onError: (err: Error) => {
+      toast({
+        title: 'Nie udało się usunąć rezerwacji',
+        description: err.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const { data: allReservations = [], isPending } = useQuery({
+    queryKey: ['admin-reservations', adminId],
+    queryFn: () => fetchAdminReservationsEnriched(adminId!),
+    enabled: !!adminId,
+  });
+
+  const filtered = allReservations.filter(r => {
+    if (facilityId && r.area?.facility_id !== facilityId) return false;
     if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      return r.reservationNumber.toLowerCase().includes(q) ||
+      return (
+        r.reservationNumber.toLowerCase().includes(q) ||
         r.reservationHolder.toLowerCase().includes(q) ||
-        r.email.toLowerCase().includes(q);
+        r.email.toLowerCase().includes(q)
+      );
     }
     return true;
   });
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-4">
         <div className="flex gap-2 flex-wrap">
           {STATUSES.map(s => (
@@ -38,7 +83,9 @@ export default function AdminReservations() {
               onClick={() => setStatusFilter(s)}
               className={cn(
                 'px-4 py-2 rounded-full font-body text-xs font-medium transition-colors',
-                statusFilter === s ? 'bg-accent text-accent-foreground' : 'bg-surface-lowest text-muted-foreground hover:bg-surface-high/50'
+                statusFilter === s
+                  ? 'bg-accent text-accent-foreground'
+                  : 'bg-surface-lowest text-muted-foreground hover:bg-surface-high/50',
               )}
             >
               {STATUS_LABEL[s]}
@@ -57,7 +104,6 @@ export default function AdminReservations() {
         </div>
       </div>
 
-      {/* Table */}
       <div className="bg-surface-lowest rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -65,35 +111,63 @@ export default function AdminReservations() {
               <tr className="bg-surface-low">
                 <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3">Nr</th>
                 <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3">Klient</th>
-                <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3 hidden md:table-cell">Sala</th>
-                <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3 hidden lg:table-cell">Typ</th>
-                <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3 hidden lg:table-cell">Godziny</th>
+                <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3 hidden md:table-cell">
+                  Sala
+                </th>
+                <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3 hidden lg:table-cell">
+                  Typ
+                </th>
+                <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3 hidden lg:table-cell">
+                  Godziny
+                </th>
                 <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3">Kwota</th>
                 <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-5 py-3">Status</th>
+                <th className="font-body text-xs font-medium tracking-[0.04em] uppercase text-muted-foreground px-3 py-3 w-14 text-right">
+                  <span className="sr-only">Usuń</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(r => (
-                <tr key={r.id} className="hover:bg-surface-low/50 transition-colors">
-                  <td className="px-5 py-4">
-                    <Link to={`/admin/rezerwacje/${r.id}`} className="font-display text-sm font-semibold text-primary hover:underline underline-offset-2">
-                      {r.reservationNumber}
-                    </Link>
+              {isPending && (
+                <tr>
+                  <td colSpan={8} className="px-5 py-12 text-center">
+                    <p className="font-body text-sm text-muted-foreground">Ładowanie…</p>
                   </td>
-                  <td className="px-5 py-4">
-                    <span className="font-body text-sm text-foreground">{r.reservationHolder}</span>
-                    <span className="block font-body text-xs text-muted-foreground">{r.email}</span>
-                  </td>
-                  <td className="px-5 py-4 hidden md:table-cell font-body text-sm text-foreground">{r.area?.name}</td>
-                  <td className="px-5 py-4 hidden lg:table-cell font-body text-sm text-muted-foreground">{RESERVATION_TYPE_LABELS[r.reservationType]}</td>
-                  <td className="px-5 py-4 hidden lg:table-cell font-body text-sm text-muted-foreground">
-                    {r.schedules.map(s => `${minutesToTime(s.starts_at)}–${minutesToTime(s.ends_at)}`).join(', ')}
-                  </td>
-                  <td className="px-5 py-4 font-display text-sm font-semibold text-foreground">{r.payment?.amount.toFixed(0)} zł</td>
-                  <td className="px-5 py-4"><StatusBadge status={r.status} /></td>
                 </tr>
-              ))}
-              {filtered.length === 0 && (
+              )}
+              {!isPending &&
+                filtered.map(r => (
+                  <tr key={r.id} className="hover:bg-surface-low/50 transition-colors">
+                    <td className="px-5 py-4">
+                      <Link
+                        to={`/admin/rezerwacje/${r.id}`}
+                        className="font-display text-sm font-semibold text-primary hover:underline underline-offset-2"
+                      >
+                        {r.reservationNumber}
+                      </Link>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className="font-body text-sm text-foreground">{r.reservationHolder}</span>
+                      <span className="block font-body text-xs text-muted-foreground">{r.email}</span>
+                    </td>
+                    <td className="px-5 py-4 hidden md:table-cell font-body text-sm text-foreground">{r.area?.name}</td>
+                    <td className="px-5 py-4 hidden lg:table-cell font-body text-sm text-muted-foreground">
+                      {RESERVATION_TYPE_LABELS[r.reservationType]}
+                    </td>
+                    <td className="px-5 py-4 hidden lg:table-cell font-body text-sm text-muted-foreground">
+                      {r.schedules.length
+                        ? r.schedules.map(s => `${minutesToTime(s.starts_at)}–${minutesToTime(s.ends_at)}`).join(', ')
+                        : '—'}
+                    </td>
+                    <td className="px-5 py-4 font-display text-sm font-semibold text-foreground">
+                      {(r.payment?.amount ?? 0).toFixed(0)} zł
+                    </td>
+                    <td className="px-5 py-4">
+                      <StatusBadge status={r.status} />
+                    </td>
+                  </tr>
+                ))}
+              {!isPending && filtered.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-5 py-12 text-center">
                     <p className="font-body text-sm text-muted-foreground">Brak rezerwacji spełniających kryteria.</p>
@@ -104,6 +178,29 @@ export default function AdminReservations() {
           </table>
         </div>
       </div>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={open => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Usunąć rezerwację?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget
+                ? `Rezerwacja ${deleteTarget.label} zostanie trwale usunięta z systemu.`
+                : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Anuluj</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isPending || !deleteTarget}
+              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+            >
+              {deleteMutation.isPending ? 'Usuwanie…' : 'Usuń'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

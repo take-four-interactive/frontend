@@ -18,11 +18,12 @@ import AdminAvailability from "@/pages/admin/AdminAvailability";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminTechnicalBrake from "./pages/admin/AdminTechnicalBrake";
 import NotFound from "@/pages/NotFound";
+import { getAdminSession } from '@/lib/cookies';
 
 const queryClient = new QueryClient();
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const token = localStorage.getItem('mosir_admin_token');
+  const { token } = getAdminSession();
   if (!token) return <Navigate to="/admin" replace />;
   return <>{children}</>;
 }
