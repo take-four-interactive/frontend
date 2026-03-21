@@ -42,11 +42,7 @@ npm install
 Utwórz plik `.env.local` w katalogu głównym projektu i dodaj adres API:
 
 ```text
-<<<<<<< HEAD
-VITE_API_URL=http://localhost:8000
-=======
 VITE_API_URL=https://unaverred-armida-clownishly.ngrok-free.dev
->>>>>>> 26b527bcf1489cbade1612308b79f8719ffec22e
 ```
 
 Gdzie `http://localhost:8000` to adres, pod którym dostępny jest backend (dostosuj do swojego środowiska).
